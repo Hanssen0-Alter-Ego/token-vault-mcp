@@ -11,3 +11,4 @@ dist
 data/
 *.claim.json
 .package
+artifacts

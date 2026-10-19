@@ -66,19 +66,48 @@ docker compose up -d --build
 
 `#fragment` 不会随 HTTP 请求发送，不能拿来做 MCP 连接认证。业务 Token 不属于 MCP 连接配置，二者是不同的密钥。
 
-**网页端限制：** 插件配置规范支持 API-key 声明；OpenAI 官方同时说明提交门户连接表单不支持该声明。因此不能仅凭 `mcp.json` 就断言网页一定有独立 Token 输入框。包提供 `urlTemplates` 自定义主机模板；认证界面的实际行为仍须在部署和安装后验证。没有宣称当前插件已经完成 ChatGPT/Dot 连接。[官方认证配置说明](https://developers.openai.com/plugins/build/plugins#fixed-bearer-tokens-and-api-keys)
+**网页端限制：** API-key 声明不会自动产生 Token 输入框，官方提交门户也不支持这种连接表单。本项目的网页安装经验是使用固定路径认证，不依赖可变 URL 模板。是否自动建立连接仍由账号和宿主决定。[官方认证配置说明](https://developers.openai.com/plugins/build/plugins#fixed-bearer-tokens-and-api-keys)
 
-部署后生成含 SKILL 和 MCP 的插件包；命令只接收不含密钥的域名：
+### 一条命令生成含密钥的私密插件包
+
+在已部署的项目目录中，保留原有 `.env`，执行：
 
 ```sh
-npm run plugin:build -- https://YOUR_VAULT_HOST
-# 网页不支持独立 Token 输入时，生成支持 host + token 私密路径模板的版本：
-npm run plugin:build -- https://YOUR_VAULT_HOST --path-auth
+npm ci
+npm run plugin:build
 ```
 
-输出 `.package/token-vault.tar.gz`，包不含连接密钥。默认包声明 Bearer/API-key，兼容包声明 `https://{vault_host}/mcp/{vault_token}`；在支持该模板的宿主连接设置中填写自己的主机和密钥。如果宿主不提供模板配置，也可先通过自定义 MCP 配置完整私密 URL，再使用同一个 SKILL。不要把密钥写进公共仓库或分享插件包。
+输出到**可见目录** `artifacts/token-vault-private.tar.gz`，终端也会打印完整文件路径。之前的输出在隐藏的 `.package/` 目录；新版不再把成品放在那里。需要 Node.js 24+ 和 `tar`，不会重新生成或修改密钥，也不会部署 Worker。
 
-`plugin/` 是插件源码和模板，尚未创建到账号。没有真实部署地址时不创建占位连接。安装、工具发现和 ChatGPT/Dot 终端能力需部署后再验证。
+脚本从本地 `.env` 读取 `PUBLIC_ORIGIN` 和 `MCP_ACCESS_KEY`，把完整的 `https://主机/mcp/密钥` 固定写进 MCP 配置，宿主认证声明为 None；SKILL、经过哈希校验的命令行助手和 Codex 兼容配置一起打包。**不会包含 `.env`、`VAULT_ENCRYPTION_KEY`、数据库或业务 Token。** Linux/macOS 下临时目录为私有目录，文件与压缩包权限为 `0600`；中间文件在打包后清理。终端不打印密钥或私密连接 URL。
+
+密钥文件在其他位置时：
+
+```sh
+npm run plugin:build -- --env-file /PRIVATE_DIR/vault.env
+```
+
+可使用 `--output-dir` 指定输出目录。旧的 `--path-auth` 参数现在等同于默认私密模式，不再生成尚未验证的 URL 模板。若额外传入域名，必须与该凭据文件的 `PUBLIC_ORIGIN` 完全一致；不接受在命令参数中传入密钥或完整私密 URL。
+
+**这个压缩包含金库的管理密钥，不是加密压缩包。** 拿到它的人可以读写整个个人金库；上传给 ChatGPT/Plugin Creator 也会把此连接密钥交给该平台处理和保存。只用于自己的私有安装，不要上传到公共仓库、公开发布、转发给无权使用该金库的人。`artifacts/` 已从 Git 和 Docker 构建上下文中排除；自行指定其他输出目录时仍须保护文件。分享项目时，让每个人用自己的 `.env` 生成自己的包。
+
+### 上传到 ChatGPT 并确认工具可调用
+
+1. 在私有 ChatGPT 对话中选择 **Plugin Creator**，附加 `artifacts/token-vault-private.tar.gz`。不是把文件发到任意对话就算安装，也不依赖 Settings 中存在压缩包导入按钮。
+2. 请求：“使用附件创建私有 Token Vault 插件，包含 SKILL、脚本和 MCP 连接。若已有同一插件则更新。连接 URL 含密钥，不要在回复中展示它或配置内容。”
+3. 打开返回的插件页面，安装或启用。确认发现 `list_tokens`、`create_token_read_link`、`create_token_write_link`、`delete_token`、`recent_activity`，并实际调用一次 `list_tokens`。压缩包已生成、插件已保存、`/health` 正常都不能替代这一步。
+
+**若宿主没有激活包内的远程 MCP：** 在 Plugins → ＋ → Add custom MCP server 中，填写包内 `mcp.json` 的完整 URL（在本机查看，不发到聊天），认证选 None。先确认五个工具出现、设置页可打开、`list_tokens` 可调用，再把新插件的链接/技术 ID 和压缩包交给 Plugin Creator，要求“仅合入 SKILL 与配套脚本，保留现有 App 连接、身份、名称和认证设置”。这就是本次验证可行的回退流程。不要通过给坏连接反复补 SKILL、换聊天或重置加密密钥来排查。
+
+### 不含密钥的包
+
+```sh
+npm run plugin:build -- https://YOUR_VAULT_HOST --public
+```
+
+输出 `artifacts/token-vault.tar.gz`，使用固定 `/mcp` 地址和 Bearer/API-key 声明；即使本地 `.env` 存在，也不写入任何密钥。适合支持单独配置认证的宿主；不能承诺 ChatGPT 网页会提供对应输入框。它是源码/私有分发包，不代表已通过公开插件目录的审核。
+
+服务端不需要为此次打包更新重新部署；插件包版本为 `0.2.1`，领取协议和助手仍与服务端 `0.2.0` 兼容。每个人的安装、工具调用和 ChatGPT/Dot 终端能力仍需在各自环境验证。
 
 ## 使用：直接调用随 SKILL 提供的脚本
 

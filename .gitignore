@@ -11,5 +11,6 @@ dist/
 *.tsbuildinfo
 src/cli-source.ts
 .package/
+artifacts/
 data/
 *.claim.json
