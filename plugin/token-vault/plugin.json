@@ -1,0 +1,19 @@
+{
+  "$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name":"token-vault",
+  "version":"0.1.0",
+  "description":"Use named credentials through short-lived, one-use links and run real CLI commands without placing durable tokens in MCP messages.",
+  "author":{"name":"Hanssen0-Alter-Ego"},
+  "repository":"https://github.com/Hanssen0-Alter-Ego/token-vault-mcp",
+  "extensions":{"com.openai":{"interface":{
+    "displayName":"Token Vault",
+    "shortDescription":"私有凭据与一次性领取",
+    "longDescription":"Connect your own Token Vault. Agents request one-use links, receive credentials directly in command processes, and run actual CLIs. Supports direct credential upload from process environments. Requires a connected vault and a terminal-capable agent.",
+    "developerName":"Hanssen0-Alter-Ego",
+    "category":"Developer Tools",
+    "capabilities":["Read","Write"],
+    "logo":"./assets/icon.svg",
+    "composerIcon":"./assets/icon.svg",
+    "defaultPrompt":"使用 Token Vault 列出凭据，为我授权的 CLI 任务申请一次性链接；不要把长期 Token 放进对话或工具参数。"
+  }}}
+}

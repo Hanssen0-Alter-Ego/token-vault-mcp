@@ -1,0 +1,27 @@
+{
+  "name": "token-vault-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/prepare-cli.mjs && node tests/prepare.mjs && node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "init": "node scripts/init-env.mjs",
+    "cf:deploy": "npm run build && wrangler deploy",
+    "cf:secrets": "node scripts/cf-secrets.mjs",
+    "plugin:build": "node scripts/package-plugin.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261019.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@types/node": "24.7.2",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "wrangler": "4.151.2"
+  }
+}

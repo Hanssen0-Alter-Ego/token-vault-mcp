@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.test-build/
+.wrangler/
+.env
+.env.*
+!.env.example
+.dev.vars*
+*.sqlite*
+*.log
+*.tsbuildinfo
+src/cli-source.ts
+.package/
+data/

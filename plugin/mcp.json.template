@@ -1,0 +1,11 @@
+{
+  "$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers":{"token-vault":{
+    "type":"streamable-http",
+    "url":"https://YOUR_VAULT_HOST/mcp",
+    "extensions":{"com.openai":{
+      "urlTemplates":["https://{vault_host}/mcp"],
+      "auth":{"type":"api_key","headerScheme":"bearer"}
+    }}
+  }}
+}
