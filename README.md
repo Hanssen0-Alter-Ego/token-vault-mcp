@@ -154,22 +154,35 @@ Content-Type: application/json
 
 无需 `prepare`、`claimChallenge` 或一次性链接。已有同名记录时，设置 `overwrite:true` 才会覆盖。成功仅返回 `{"stored":true}`，不回显 Token；所有成功保存的凭据立即可供 Agent 领取。缺失或错误管理密钥返回 401，未授权覆盖返回 409。
 
-建议用私有文件输入，避免把密钥写进 Shell 历史或进程参数：
+### 用上传脚本新建或更新
 
-1. 在自己的终端运行 `umask 077` 和 `mktemp -d`，把返回的绝对路径替换下方 `/PRIVATE_DIR`。
-2. 用本地编辑器在该目录创建 `auth.headers`，内容为 `Authorization: Bearer ` 后接你的 `MCP_ACCESS_KEY`；再创建 `token.json`，填写上面的请求体。两个文件权限应为 0600。不要把它们发给 Agent 或上传到聊天。
-3. 自己执行下面的请求，然后删除这两个文件：
+脚本是 [cli/vault-upload.sh](cli/vault-upload.sh)，仅供用户手动执行，不随 Agent 插件打包。需要 POSIX `sh`、curl 7.55+、awk、stty、mktemp 和常见 Unix 工具，无需 Node、Python 或 jq。必须在有交互终端的本机或服务器执行，不要通过 Agent 代运行。
+
+已克隆仓库时，在仓库目录运行：
 
 ```sh
-curl -q --silent --show-error --fail --proto '=https' \
-  --request POST --max-time 15 --max-redirs 0 \
-  --header @/PRIVATE_DIR/auth.headers \
-  --header 'Content-Type: application/json' \
-  --data-binary @/PRIVATE_DIR/token.json \
-  https://YOUR_VAULT_HOST/admin/tokens
+# 新建：记录名称 openai/main，使用时注入 OPENAI_API_KEY
+sh cli/vault-upload.sh --origin https://YOUR_VAULT_HOST openai/main OPENAI_API_KEY
 
-rm -f /PRIVATE_DIR/auth.headers /PRIVATE_DIR/token.json
+# 更新：替换 github/main 的 Token，并保留 GH_TOKEN 作为环境变量名
+sh cli/vault-upload.sh --origin https://YOUR_VAULT_HOST github/main GH_TOKEN --overwrite
 ```
+
+把域名替换成你自己的 HTTPS origin，不带路径或末尾斜杠；名称和环境变量按需修改。脚本没有默认服务地址，避免误传到别人的金库。不加 `--overwrite` 时只允许新建，同名记录返回 409。
+
+不需要克隆整个项目时，可以先下载脚本，再在自己的终端运行：
+
+```sh
+curl -q --fail --silent --show-error --proto '=https' \
+  -o vault-upload.sh \
+  https://raw.githubusercontent.com/Hanssen0-Alter-Ego/token-vault-mcp/main/cli/vault-upload.sh
+
+sh vault-upload.sh --origin https://YOUR_VAULT_HOST openai/main OPENAI_API_KEY
+```
+
+运行时依次隐藏输入金库的 `MCP_ACCESS_KEY` 和要保存的单行业务 Token。无需把密钥写进命令、设置环境变量或先申请链接；成功显示 `{"stored":true}`。认证头和 JSON 请求体通过 0600 私有临时文件传递，正常完成或请求失败后都会清理；脚本还会恢复终端回显。强制终止或系统崩溃时，临时文件可能残留。
+
+认证失败返回 401；新建时遇到重名返回 409，请确认后用 `--overwrite` 再次运行。不要向聊天发送密钥、临时文件或带密钥的连接 URL。
 
 此接口只接受 Bearer 请求头认证，不接受路径或 query 中的密钥，也不开放跨站浏览器调用。Agent 的上传仍走 MCP 签发链接和终端 secret 校验流程。
 

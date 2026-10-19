@@ -24,7 +24,7 @@ test('packaged SKILL includes the exact verified helper and its runnable prepare
  assert.equal(spawnSync('/bin/sh',['-n'],{input:helper}).status,0);
  const listing=spawnSync('tar',['-tzf',archive],{encoding:'utf8'}).stdout;
  assert.equal(listing.split('\n').filter(path=>path.includes('scripts/')&&!path.endsWith('/')).length,1);
- assert.ok(!listing.includes('vault-cli.mjs')&&!listing.includes('shell-helper-integrity.json'));
+ assert.ok(!listing.includes('vault-cli.mjs')&&!listing.includes('shell-helper-integrity.json')&&!listing.includes('vault-upload.sh'));
  assert.match(extract(archive,'skills/token-vault/SKILL.md'),/--state/);assert.match(extract(archive,'skills/token-vault/SKILL.md'),/claimChallenge/);
  assert.equal(spawnSync('tar',['-xzf',archive,'-C',dir]).status,0);
  const statePath=join(dir,'test.claim.state'),script=join(dir,'token-vault/skills/token-vault/scripts/vault-cli.sh');
