@@ -19,17 +19,18 @@ function extract(archive,path) {
 test('packaged SKILL includes the exact verified helper and its runnable prepare prints only a public challenge',async t=>{
  const {dir,build}=await fixture(t,{env:false});const built=build(['https://vault.example.com','--public']);assert.equal(built.status,0);
  const archive=join(dir,'artifacts/token-vault.tar.gz');
- const helper=extract(archive,'skills/token-vault/scripts/vault-cli.mjs'),source=await readFile('cli/vault-cli.mjs','utf8');assert.equal(helper,source);
+ const helper=extract(archive,'skills/token-vault/scripts/vault-cli.sh'),source=await readFile('cli/vault-cli.sh','utf8');assert.equal(helper,source);
  const integrity=JSON.parse(extract(archive,'skills/token-vault/references/helper-integrity.json'));assert.equal(integrity.sha256,createHash('sha256').update(helper).digest('hex'));
- const shell=extract(archive,'skills/token-vault/scripts/vault-cli.sh');assert.equal(shell,await readFile('cli/vault-cli.sh','utf8'));
- const shellIntegrity=JSON.parse(extract(archive,'skills/token-vault/references/shell-helper-integrity.json'));assert.equal(shellIntegrity.sha256,createHash('sha256').update(shell).digest('hex'));
- assert.equal(spawnSync('/bin/sh',['-n'],{input:shell}).status,0);
+ assert.equal(spawnSync('/bin/sh',['-n'],{input:helper}).status,0);
+ const listing=spawnSync('tar',['-tzf',archive],{encoding:'utf8'}).stdout;
+ assert.equal(listing.split('\n').filter(path=>path.includes('scripts/')&&!path.endsWith('/')).length,1);
+ assert.ok(!listing.includes('vault-cli.mjs')&&!listing.includes('shell-helper-integrity.json'));
  assert.match(extract(archive,'skills/token-vault/SKILL.md'),/--state/);assert.match(extract(archive,'skills/token-vault/SKILL.md'),/claimChallenge/);
  assert.equal(spawnSync('tar',['-xzf',archive,'-C',dir]).status,0);
- const statePath=join(dir,'test.claim.json'),script=join(dir,'token-vault/skills/token-vault/scripts/vault-cli.mjs');
- const result=spawnSync(process.execPath,[script,'prepare','--origin','https://vault.example.com','--env','GH_TOKEN','--state',statePath],{encoding:'utf8'});assert.equal(result.status,0);
- const output=JSON.parse(result.stdout),state=JSON.parse(await readFile(statePath,'utf8'));
- assert.equal(output.claimChallenge,createHash('sha256').update(state.verifier).digest('base64url'));assert.ok(!result.stdout.includes(state.verifier));assert.equal((await stat(statePath)).mode&0o777,0o600);
+ const statePath=join(dir,'test.claim.state'),script=join(dir,'token-vault/skills/token-vault/scripts/vault-cli.sh');
+ const result=spawnSync('/bin/sh',[script,'prepare','--origin','https://vault.example.com','--env','GH_TOKEN','--state',statePath],{encoding:'utf8'});assert.equal(result.status,0);
+ const output=JSON.parse(result.stdout),verifier=(await readFile(statePath,'utf8')).trimEnd().split('\n')[4];
+ assert.equal(output.claimChallenge,createHash('sha256').update(verifier).digest('base64url'));assert.ok(!result.stdout.includes(verifier));assert.equal((await stat(statePath)).mode&0o777,0o600);
 });
 
 test('default private tar embeds only the MCP key, preserves fixed auth and leaves no staging secrets',async t=>{

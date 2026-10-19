@@ -10,9 +10,8 @@ import {fetchApp} from '../dist/app.mjs';
 import {testDB} from './d1.mjs';
 
 const helper=resolve('cli/vault-cli.sh');
-const nodeHelper=resolve('cli/vault-cli.mjs');
-const execute=(args,{input='',env={},trace=false,node=false}={})=>new Promise(resolve=>{
- const child=spawn(node?process.execPath:'/bin/sh',node?[nodeHelper,...args]:[...(trace?['-x']:[]),helper,...args],{env:{...process.env,...env},stdio:['pipe','pipe','pipe']});
+const execute=(args,{input='',env={},trace=false}={})=>new Promise(resolve=>{
+ const child=spawn('/bin/sh',[...(trace?['-x']:[]),helper,...args],{env:{...process.env,...env},stdio:['pipe','pipe','pipe']});
  let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
  child.on('exit',code=>resolve({code,stdout,stderr}));child.stdin.end(input);
 });
@@ -31,7 +30,7 @@ async function fixture(t) {
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));env.PUBLIC_ORIGIN=`https://127.0.0.1:${server.address().port}`;
  t.after(()=>new Promise(r=>server.close(r)));
- const origin=env.PUBLIC_ORIGIN,environment={CURL_CA_BUNDLE:cert,NODE_EXTRA_CA_CERTS:cert,TMPDIR:dir};
+ const origin=env.PUBLIC_ORIGIN,environment={CURL_CA_BUNDLE:cert,TMPDIR:dir};
  const args=(mode,state,command=[])=>[mode,'--origin',origin,'--env','GH_TOKEN','--state',state,...(command.length?['--',...command]:[])];
  const prepare=async(extraEnv={})=>{
    const state=join(dir,`claim-${randomBytes(6).toString('hex')}.state`),result=await execute(args('prepare',state),{env:{...environment,...extraEnv}});
@@ -58,17 +57,23 @@ test('sh upload and read work with real HTTPS and Worker, inject exact token and
  const f=await fixture(t),name='shell/test',value='synthetic-"quote"\\slash\ttab$(not-executed)';
  const upload=await f.prepare();
  const write=await f.rpc('create_token_write_link',{name,provider:'other',envVar:'GH_TOKEN',allowAgentUse:true,purpose:'synthetic shell upload',claimChallenge:upload.challenge});
+ assert.equal(write.helper.url,f.origin+'/vault-cli.sh');
  const stored=await execute(f.args('store',upload.state),{input:write.url+'\n',env:{...f.environment,GH_TOKEN:value},trace:true});
  assert.equal(stored.code,0,stored.stderr);assert.ok(!stored.stdout.includes(value)&&!stored.stderr.includes(value)&&!stored.stderr.includes(upload.verifier));
  await assert.rejects(access(upload.state));assert.equal(JSON.parse(f.requests[0].body).token,value);
  assert.equal(f.requests[0].headers['x-vault-verifier'],upload.verifier);assert.equal(f.requests[0].url,'/redeem/write');
  const p=await f.prepare(),read=await f.rpc('create_token_read_link',{name,purpose:'synthetic shell child',claimChallenge:p.challenge});
+ const metadata=JSON.stringify({write,read});
+ assert.ok(!metadata.includes(value)&&!metadata.includes(upload.verifier)&&!metadata.includes(p.verifier));
  const childCode='const fs=require("node:fs"),c=require("node:crypto");if(fs.existsSync(process.argv[1])||c.createHash("sha256").update(process.env.GH_TOKEN||"").digest("hex")!==process.argv[2])process.exit(7);process.stdout.write("child-ok")';
  const result=await execute(f.args('run',p.state,[process.execPath,'-e',childCode,p.state,createHash('sha256').update(value).digest('hex')]),{input:read.url+'\n',env:f.environment});
  assert.equal(result.code,0,result.stderr);assert.equal(result.stdout,'child-ok');assert.ok(!result.stderr.includes(value)&&!result.stderr.includes(p.verifier));
  await assert.rejects(access(p.state));
  const url=new URL(read.url),replay=await fetchApp(new Request(f.origin+url.pathname,{method:'POST',headers:{Authorization:`Bearer ${url.hash.slice(1)}`,'X-Vault-Verifier':p.verifier}}),f.env);
- assert.equal(replay.status,410);assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
+ assert.equal(replay.status,410);
+ const audit=JSON.stringify(await f.rpc('recent_activity',{}));
+ assert.ok(!audit.includes(value)&&!audit.includes(p.verifier)&&!audit.includes(url.hash.slice(1)));
+ assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
 });
 
 test('sh helper rejects unsafe state, origin and env substitution before sending a request',async t=>{
@@ -122,22 +127,4 @@ test('a wrong shell proof cannot burn a valid write grant, and redemption never 
  assert.ok(!JSON.stringify(f.requests).includes(f.env.MCP_ACCESS_KEY));
  const url=new URL(grant.url),accepted=await fetchApp(new Request(f.origin+url.pathname,{method:'POST',headers:{Authorization:`Bearer ${url.hash.slice(1)}`,'X-Vault-Verifier':p.verifier,'Content-Type':'application/json'},body:JSON.stringify({token:'synthetic-proof-token'})}),f.env);
  assert.equal(accepted.status,200);assert.deepEqual(await accepted.json(),{stored:true});
-});
-
-test('real Node CLI entry reads write/read URLs from stdin, completes HTTPS round trip and cleans state',async t=>{
- const f=await fixture(t),value='synthetic-node-cli-stdin-token',name='node/stdin';
- const prepare=async()=>{
-   const state=join(f.dir,`node-${randomBytes(5).toString('hex')}.json`);
-   const result=await execute(f.args('prepare',state),{node:true,env:f.environment});assert.equal(result.code,0,result.stderr);
-   return {state,challenge:JSON.parse(result.stdout).claimChallenge};
- };
- const upload=await prepare(),write=await f.rpc('create_token_write_link',{name,provider:'other',envVar:'GH_TOKEN',allowAgentUse:true,purpose:'real Node CLI stdin regression',claimChallenge:upload.challenge});
- const stored=await execute(f.args('store',upload.state),{node:true,input:write.url+'\n',env:{...f.environment,GH_TOKEN:value}});
- assert.equal(stored.code,0,stored.stderr);assert.equal(stored.stdout,'');await assert.rejects(access(upload.state));
- assert.equal(JSON.parse(f.requests[0].body).token,value);
- const proof=await prepare(),read=await f.rpc('create_token_read_link',{name,purpose:'real Node CLI stdin regression',claimChallenge:proof.challenge});
- const child='if(require("node:fs").existsSync(process.argv[1])||require("node:crypto").createHash("sha256").update(process.env.GH_TOKEN||"").digest("hex")!==process.argv[2])process.exit(9);process.stdout.write("node-cli-stdin-ok")';
- const result=await execute(f.args('run',proof.state,[process.execPath,'-e',child,proof.state,createHash('sha256').update(value).digest('hex')]),{node:true,input:read.url+'\n',env:f.environment});
- assert.equal(result.code,0,result.stderr);assert.equal(result.stdout,'node-cli-stdin-ok');await assert.rejects(access(proof.state));
- assert.ok(!(stored.stdout+stored.stderr+result.stdout+result.stderr).includes(value));
 });
