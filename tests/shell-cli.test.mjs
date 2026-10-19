@@ -56,13 +56,13 @@ test('sh helper prepares cryptographic state with private permissions and prints
 test('sh upload and read work with real HTTPS and Worker, inject exact token and reject replay',async t=>{
  const f=await fixture(t),name='shell/test',value='synthetic-"quote"\\slash\ttab$(not-executed)';
  const upload=await f.prepare();
- const write=await f.rpc('create_token_write_link',{name,provider:'other',envVar:'GH_TOKEN',allowAgentUse:true,purpose:'synthetic shell upload',claimChallenge:upload.challenge});
+ const write=await f.rpc('create_token_write_link',{name,envVar:'GH_TOKEN',claimChallenge:upload.challenge});
  assert.equal(write.helper.url,f.origin+'/vault-cli.sh');
  const stored=await execute(f.args('store',upload.state),{input:write.url+'\n',env:{...f.environment,GH_TOKEN:value},trace:true});
  assert.equal(stored.code,0,stored.stderr);assert.ok(!stored.stdout.includes(value)&&!stored.stderr.includes(value)&&!stored.stderr.includes(upload.verifier));
  await assert.rejects(access(upload.state));assert.equal(JSON.parse(f.requests[0].body).token,value);
  assert.equal(f.requests[0].headers['x-vault-verifier'],upload.verifier);assert.equal(f.requests[0].url,'/redeem/write');
- const p=await f.prepare(),read=await f.rpc('create_token_read_link',{name,purpose:'synthetic shell child',claimChallenge:p.challenge});
+ const p=await f.prepare(),read=await f.rpc('create_token_read_link',{name,claimChallenge:p.challenge});
  const metadata=JSON.stringify({write,read});
  assert.ok(!metadata.includes(value)&&!metadata.includes(upload.verifier)&&!metadata.includes(p.verifier));
  const childCode='const fs=require("node:fs"),c=require("node:crypto");if(fs.existsSync(process.argv[1])||c.createHash("sha256").update(process.env.GH_TOKEN||"").digest("hex")!==process.argv[2])process.exit(7);process.stdout.write("child-ok")';
@@ -120,7 +120,7 @@ test('sh helper runs without Node, Python, jq or Bash on PATH and preserves chil
 
 test('a wrong shell proof cannot burn a valid write grant, and redemption never needs the MCP master key',async t=>{
  const f=await fixture(t),p=await f.prepare();
- const grant=await f.rpc('create_token_write_link',{name:'shell/proof',provider:'other',envVar:'GH_TOKEN',allowAgentUse:true,purpose:'proof rejection test',claimChallenge:p.challenge});
+ const grant=await f.rpc('create_token_write_link',{name:'shell/proof',envVar:'GH_TOKEN',claimChallenge:p.challenge});
  const changed=[...p.lines];changed[4]=randomBytes(32).toString('base64url');await writeFile(p.state,changed.join('\n')+'\n');
  const denied=await execute(f.args('store',p.state),{input:grant.url,env:{...f.environment,GH_TOKEN:'synthetic-proof-token'}});
  assert.notEqual(denied.code,0);assert.match(denied.stderr,/403/);await assert.rejects(access(p.state));
