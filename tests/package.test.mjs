@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import {readFile,mkdtemp,stat,rm} from 'node:fs/promises';
+import {join,resolve} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
+test('packaged SKILL includes the exact verified helper and its runnable prepare prints only a public challenge',async t=>{
+ const built=spawnSync(process.execPath,['scripts/package-plugin.mjs','https://vault.example.com','--path-auth'],{encoding:'utf8'});assert.equal(built.status,0);
+ const archive=resolve('.package/token-vault.tar.gz');
+ const extract=path=>{const result=spawnSync('tar',['-xOf',archive,`token-vault/${path}`],{encoding:'utf8'});assert.equal(result.status,0);return result.stdout;};
+ const helper=extract('skills/token-vault/scripts/vault-cli.mjs'),source=await readFile('cli/vault-cli.mjs','utf8');assert.equal(helper,source);
+ const integrity=JSON.parse(extract('skills/token-vault/references/helper-integrity.json'));assert.equal(integrity.sha256,createHash('sha256').update(helper).digest('hex'));
+ assert.match(extract('skills/token-vault/SKILL.md'),/--state/);assert.match(extract('skills/token-vault/SKILL.md'),/claimChallenge/);
+ const dir=await mkdtemp(join(tmpdir(),'vault-package-test-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ assert.equal(spawnSync('tar',['-xzf',archive,'-C',dir]).status,0);
+ const statePath=join(dir,'test.claim.json'),script=join(dir,'token-vault/skills/token-vault/scripts/vault-cli.mjs');
+ const result=spawnSync(process.execPath,[script,'prepare','--origin','https://vault.example.com','--env','GH_TOKEN','--state',statePath],{encoding:'utf8'});assert.equal(result.status,0);
+ const output=JSON.parse(result.stdout),state=JSON.parse(await readFile(statePath,'utf8'));
+ assert.equal(output.claimChallenge,createHash('sha256').update(state.verifier).digest('base64url'));assert.ok(!result.stdout.includes(state.verifier));assert.equal((await stat(statePath)).mode&0o777,0o600);
+});

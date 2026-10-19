@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
-import {encryptSecret,decryptSecret,assertSameOrigin,validateName,validateEnvVar,readJSON,redemptionOrigin} from '../.test-build/security.mjs';
+import {encryptSecret,decryptSecret,assertSameOrigin,validateName,validateEnvVar,readJSON,redemptionOrigin,verifierChallenge,validateClaimChallenge} from '../.test-build/security.mjs';
 test('authenticated encryption uses random nonces and binds ciphertext to user and record',async()=>{
  const key=randomBytes(32).toString('base64'),value='synthetic-only';
  const a=await encryptSecret(value,'a:one',key),b=await encryptSecret(value,'a:one',key);
@@ -21,4 +21,12 @@ test('browser mutations, environment names and configured gateway origins are va
 test('JSON parsing refuses unbounded or non-JSON input',async()=>{
  await assert.rejects(readJSON(new Request('https://vault.example',{method:'POST',headers:{'Content-Type':'text/plain'},body:'{}'})));
  await assert.rejects(readJSON(new Request('https://vault.example',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:'a'.repeat(1000)})}),100));
+});
+
+test('S256 proof hashing agrees with RFC 7636 and rejects malformed verifiers',async()=>{
+ const verifier='dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+ assert.equal(await verifierChallenge(verifier),'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+ for(const value of [null,undefined,'short','a'.repeat(129),'a'.repeat(42)+'\n'])assert.equal(await verifierChallenge(value),null);
+ assert.equal(validateClaimChallenge('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'),'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+ assert.throws(()=>validateClaimChallenge("not-a-valid-challenge"));
 });

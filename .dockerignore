@@ -9,3 +9,5 @@ dist
 *.sqlite*
 *.log
 data/
+*.claim.json
+.package

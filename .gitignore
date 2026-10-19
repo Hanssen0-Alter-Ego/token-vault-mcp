@@ -12,3 +12,4 @@ dist/
 src/cli-source.ts
 .package/
 data/
+*.claim.json

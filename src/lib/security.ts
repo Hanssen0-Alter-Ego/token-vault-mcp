@@ -70,3 +70,14 @@ export async function ticketHash(value: string) {
   if (!/^[a-f0-9]{64}$/.test(value)) throw new AppError("领取链接无效或已失效。", 410);
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), b => b.toString(16).padStart(2, "0")).join("");
 }
+
+/** Public S256 challenge, never the terminal's verifier. */
+export function validateClaimChallenge(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) throw new AppError("请先用命令行助手生成 S256 claimChallenge，不要提交 secret 原文。");
+  return value;
+}
+export async function verifierChallenge(value: unknown): Promise<string | null> {
+  if (typeof value !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(value)) return null;
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return encode(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
