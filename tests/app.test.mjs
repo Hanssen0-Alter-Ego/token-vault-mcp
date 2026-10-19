@@ -33,6 +33,7 @@ test('synthetic flow: MCP upload -> direct environment upload -> MCP read -> chi
  const stolen=new URL(read.url);
  for(const extra of [{},{'X-Vault-Verifier':proof.claimChallenge}]){const denied=await fetcher(stolen.origin+stolen.pathname,{method:'POST',headers:{Authorization:`Bearer ${stolen.hash.slice(1)}`,...extra}});assert.equal(denied.status,403);}
  const helper=await fetcher(read.helper.url);assert.equal(createHash('sha256').update(await helper.text()).digest('hex'),read.helper.sha256);
+ const shell=await fetcher(read.shellHelper.url);assert.equal(shell.status,200);assert.equal(createHash('sha256').update(await shell.text()).digest('hex'),read.shellHelper.sha256);
  let childToken;const exit=await run(['run','--origin',env.PUBLIC_ORIGIN,'--env','GH_TOKEN','--state',proof.statePath,'--','gh','repo','view'],{input:read.url,environment:{},fetcher,spawnChild:(bin,argv,opts)=>{assert.equal(bin,'gh');childToken=opts.env.GH_TOKEN;const child=new EventEmitter();queueMicrotask(()=>child.emit('exit',0));return child;}});
  assert.equal(exit,0);assert.equal(childToken,value);await assert.rejects(access(proof.statePath));
  const replay=await fetcher(new URL(read.url).origin+'/redeem/read',{method:'POST',headers:{Authorization:`Bearer ${new URL(read.url).hash.slice(1)}`,'X-Vault-Verifier':verifier}});assert.equal(replay.status,410);

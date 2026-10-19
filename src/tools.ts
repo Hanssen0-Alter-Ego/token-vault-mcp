@@ -1,6 +1,6 @@
 const text = (description:string) => ({type:"string",description});
 const name = text("Exact credential name, such as github/main.");
-const claimChallenge = {type:"string",pattern:"^[A-Za-z0-9_-]{43}$",description:"Public S256 hash printed by vault-cli.mjs prepare. Required. The random secret stays in the terminal state file; never submit that secret here."};
+const claimChallenge = {type:"string",pattern:"^[A-Za-z0-9_-]{43}$",description:"Public S256 hash printed by vault-cli.sh prepare (or the Node helper). Required. The random secret stays in the terminal state file; never submit that secret here."};
 const purpose = text("Brief user-authorized task description. Never include secrets.");
 const schema = (properties:object,required:string[] = []) => ({type:"object",properties,required,additionalProperties:false});
 export const tools = [

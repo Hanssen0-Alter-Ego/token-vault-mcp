@@ -21,6 +21,9 @@ test('packaged SKILL includes the exact verified helper and its runnable prepare
  const archive=join(dir,'artifacts/token-vault.tar.gz');
  const helper=extract(archive,'skills/token-vault/scripts/vault-cli.mjs'),source=await readFile('cli/vault-cli.mjs','utf8');assert.equal(helper,source);
  const integrity=JSON.parse(extract(archive,'skills/token-vault/references/helper-integrity.json'));assert.equal(integrity.sha256,createHash('sha256').update(helper).digest('hex'));
+ const shell=extract(archive,'skills/token-vault/scripts/vault-cli.sh');assert.equal(shell,await readFile('cli/vault-cli.sh','utf8'));
+ const shellIntegrity=JSON.parse(extract(archive,'skills/token-vault/references/shell-helper-integrity.json'));assert.equal(shellIntegrity.sha256,createHash('sha256').update(shell).digest('hex'));
+ assert.equal(spawnSync('/bin/sh',['-n'],{input:shell}).status,0);
  assert.match(extract(archive,'skills/token-vault/SKILL.md'),/--state/);assert.match(extract(archive,'skills/token-vault/SKILL.md'),/claimChallenge/);
  assert.equal(spawnSync('tar',['-xzf',archive,'-C',dir]).status,0);
  const statePath=join(dir,'test.claim.json'),script=join(dir,'token-vault/skills/token-vault/scripts/vault-cli.mjs');

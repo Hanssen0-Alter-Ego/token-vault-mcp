@@ -1,4 +1,4 @@
-import {CLI_SHA256} from "./cli-integrity";
+import {CLI_SHA256,SH_CLI_SHA256} from "./cli-integrity";
 import { AppError, validateName, validateSecret, validateEnvVar, encryptSecret, decryptSecret, redemptionOrigin, newTicket, ticketHash, validateClaimChallenge, verifierChallenge } from "./security";
 import { providerFor } from "./providers";
 type Row = { id: string; user_id: string; name: string; provider: string; env_var: string; encrypted_token: string; allow_agent_use: number; revision: string; created_at: string; updated_at: string };
@@ -63,7 +63,7 @@ export class VaultService {
     if ((pending?.n || 0) >= 20) throw new AppError("未使用的领取链接过多，请稍后再试。",429);
     const ticket = newTicket(), hash = await ticketHash(ticket), expires = now + 60000;
     await this.db.batch([this.db.prepare("INSERT INTO handoffs(hash,user_id,name,kind,config,purpose,expires_at) VALUES(?,?,?,?,?,?,?)").bind(hash,user,name,kind,JSON.stringify(config),purpose.trim(),expires),this.audit(user,name,`${kind}.link_issued`)]);
-    return { url: `${origin}/redeem/${kind}#${ticket}`, method: "POST", helper: { url: `${origin}/vault-cli.mjs`, sha256: CLI_SHA256 }, expiresAt: new Date(expires).toISOString(), oneTime: true, proofRequired: true, proofMethod: "S256", envVar: kind === "read" ? existing!.env_var : input.envVar, instruction: "Sensitive one-time link. The matching terminal-held verifier is mandatory; never send it through MCP or chat. Use the CLI helper immediately; fragment is the Bearer claim, never send the fragment in a query/path. Do not print the response, enable tracing, or store the token. A lost response requires a fresh link. This link does not expire the provider token or stop a process that already received it." };
+    return { url: `${origin}/redeem/${kind}#${ticket}`, method: "POST", helper: { url: `${origin}/vault-cli.mjs`, sha256: CLI_SHA256 }, shellHelper: { url: `${origin}/vault-cli.sh`, sha256: SH_CLI_SHA256 }, expiresAt: new Date(expires).toISOString(), oneTime: true, proofRequired: true, proofMethod: "S256", envVar: kind === "read" ? existing!.env_var : input.envVar, instruction: "Sensitive one-time link. The matching terminal-held verifier is mandatory; never send it through MCP or chat. Use the CLI helper immediately; fragment is the Bearer claim, never send the fragment in a query/path. Do not print the response, enable tracing, or store the token. A lost response requires a fresh link. This link does not expire the provider token or stop a process already holding it. Use the packaged sh helper with curl and openssl when Node is unavailable; do not mix the helpers' state formats." };
   }
   async redeem(kind: "read" | "write", ticket: string, token?: unknown, verifier?: unknown) {
     // Validate upload before claiming; malformed uploads must never overwrite a saved credential.

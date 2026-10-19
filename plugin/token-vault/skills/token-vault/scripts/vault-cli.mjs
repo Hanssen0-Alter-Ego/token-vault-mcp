@@ -2,7 +2,7 @@
 // Node >=24. MCP sees only the S256 challenge; the verifier never leaves the terminal except over HTTPS to the vault.
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {open,readFile,unlink} from 'node:fs/promises';
+import {open,unlink} from 'node:fs/promises';
 import {randomBytes,createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -11,6 +11,17 @@ const stateMaxAge=5*60*1000;
 const challengeOf=secret=>createHash('sha256').update(secret,'ascii').digest('base64url');
 const envPattern=/^[A-Z][A-Z0-9_]{0,63}$/;
 const forbiddenEnv=/^(PATH|HOME|SHELL|ENV|BASH_ENV|IFS|NODE_OPTIONS|PYTHONPATH|PYTHONSTARTUP|LD_.*|DYLD_.*)$/;
+async function readStdin() {
+  let value='',bytes=0;
+  // fs/promises.readFile accepts paths/FileHandles, not numeric stdin descriptor 0.
+  process.stdin.setEncoding('utf8');
+  for await(const chunk of process.stdin) {
+    bytes+=Buffer.byteLength(chunk);
+    if(bytes>4096)throw new CliError('Claim link input is too large.');
+    value+=chunk;
+  }
+  return value;
+}
 function optionsOf(argv) {
   const mode=argv.shift(),sep=argv.indexOf('--'),pairs=sep<0?argv:argv.slice(0,sep),command=sep<0?[]:argv.slice(sep+1),options={};
   if(!['prepare','run','store'].includes(mode) || pairs.length!==6) throw new CliError('Usage: vault-cli.mjs prepare|run|store --origin https://vault.example --env GH_TOKEN --state /private/claim.json [-- command args]');
@@ -47,7 +58,7 @@ export async function run(argv,{input,fetcher=fetch,spawnChild=spawn,environment
     writeOutput(JSON.stringify({claimChallenge:challengeOf(verifier),method:'S256'})+'\n');
     return 0;
   }
-  const raw=(input ?? await readFile(0,'utf8')).trim(),url=new URL(raw),kind=mode==='run'?'read':'write';
+  const raw=(input ?? await readStdin()).trim(),url=new URL(raw),kind=mode==='run'?'read':'write';
   if(url.origin!==expected.origin || url.pathname!==`/redeem/${kind}` || url.username || url.password || url.search || !/^#[a-f0-9]{64}$/.test(url.hash))throw new CliError('Link does not match the configured vault and operation.');
   const state=await readState(statePath,expected.origin,envName),claim=url.hash.slice(1);url.hash='';
   let token='',childEnv;
