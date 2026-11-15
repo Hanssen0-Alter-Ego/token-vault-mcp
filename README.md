@@ -52,6 +52,16 @@ npm run cf:secrets
 
 首次部署到 secrets 配置完成前，金库不可用；完成后 `/health` 应返回 `{"ok":true}`。D1 保存加密凭据与链接消费状态，不能用 Worker 内存替代。费用和免费额度见 [Workers 定价](https://developers.cloudflare.com/workers/platform/pricing/)与 [D1 定价](https://developers.cloudflare.com/d1/platform/pricing/)。
 
+### Cloudflare 请求诊断日志
+
+`wrangler.jsonc` 启用自定义日志，禁用自动 invocation logs 和 traces。Worker 每次返回响应时写入 `vault_request`，字段仅含固定路由标签、HTTP 状态码和处理耗时（毫秒）。在 Worker 的 Logs 中搜索 `vault_request`，按请求时间排查 `redeem_read` / `redeem_write` 的状态。
+
+不要在 Dashboard 重新打开 invocation logs 或 traces：`/mcp/<MCP_ACCESS_KEY>` 的路径本身就是管理密钥；只删 query string 不足以保护它。代码不输出 URL、认证头、verifier、请求/响应体、凭据名称或异常内容。应用级测试只验证自定义日志字段；部署后仍应使用无秘密的请求检查 Cloudflare 实际收集的元数据，不能将其当作平台端日志脱敏保证。实时 tail、其他 Logpush 配置和历史日志不受这项配置保护。
+
+本配置需随代码重新部署才生效。保留实际部署配置中的 D1 database_id 和 secrets，不要用仓库占位值覆盖生产绑定。若已连接 Workers Builds，检查对应提交的构建/部署结果；否则运行 `npm run cf:deploy`。GitHub push 本身不证明生产部署成功。
+
+日志不追溯启用前的请求，也无法记录到达 Worker 前的 DNS/TLS/网络失败。这里的 `status` 是 HTTP 状态；MCP 工具错误可能包装在 HTTP 200 中，不应据此认定工具成功。日志按 Cloudflare 账户套餐计费。
+
 ### Docker
 
 ```sh
