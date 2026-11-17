@@ -62,6 +62,14 @@ npm run cf:secrets
 
 日志不追溯启用前的请求，也无法记录到达 Worker 前的 DNS/TLS/网络失败。这里的 `status` 是 HTTP 状态；MCP 工具错误可能包装在 HTTP 200 中，不应据此认定工具成功。日志按 Cloudflare 账户套餐计费。
 
+### 终端 helper 失败诊断
+
+0.5.1 helper 在网络或非 2xx HTTP 失败时，将安全诊断输出到 stderr：curl 退出码、UTC Unix 秒级开始/结束时间、经过秒数、HTTP 状态，以及 curl 的 DNS/连接/TLS/首字节/总耗时。响应存在且格式严格有效时，还包括最后一个 HTTP 响应块的 CF-Ray 与 UUID 格式 X-Request-ID。缺失的字段不代表服务端已收到请求；HTTP 000 不是服务端状态码。
+
+不会输出原始 curl 错误、URL、认证头、请求/响应体、Token 或 proof；成功时保持静默，不影响子命令 stdout/退出码。不能把 `/mcp` 的 200 当作 `/redeem/read` 领取成功，也不能由公开 helper GET 成功推断领取 POST 一定可达。curl 28 可能发生在连接或整体传输阶段，结合耗时定位，不自动重试同一链接。
+
+更新 helper 后需一并更新服务端公开 helper 和插件内 SHA-256 校验文件；仓库提供 `npm run build` / `npm run plugin:build`，不要绕过版本校验。此修改不改变网络设置、超时、重试或凭据授权。
+
 ### Docker
 
 ```sh

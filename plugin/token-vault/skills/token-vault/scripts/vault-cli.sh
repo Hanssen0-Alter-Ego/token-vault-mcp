@@ -129,19 +129,59 @@ if [ "$vault_mode" = store ]; then
   printf 'Content-Type: application/json\n' >> "$vault_work/request.headers"
 fi
 
+# Diagnostics contain only locally generated numbers/times and strictly formatted IDs.
+# Never expose curl stderr: it may contain URLs, proxy credentials or response data.
+vault_diagnostics() {
+  printf 'Vault diagnostic: curl_exit=%s started_epoch_s=%s finished_epoch_s=%s elapsed_s=%s' "$vault_curl_exit" "$vault_started" "$vault_finished" "$((vault_finished-vault_started))" >&2
+  LC_ALL=C awk '
+    NR==1 && /^[0-9][0-9][0-9]$/ {printf " http_status=%s",$0}
+    NR>=2 && NR<=6 && /^[0-9]+[.][0-9]+$/ && length($0)<=24 {
+      split("dns_s connect_s tls_s first_byte_s total_s",names," ");printf " %s=%s",names[NR-1],$0
+    }
+  ' "$vault_work/metrics" >&2
+  # Reset at each HTTP block (including proxy CONNECT); emit final response only.
+  LC_ALL=C awk '
+    /^HTTP\// {ray="";request="";nr=0;nq=0;origin=(tolower($0) !~ /connection established/)}
+    {sub(/\r$/,"");p=index($0,":");if(!p)next
+     key=tolower(substr($0,1,p-1));value=substr($0,p+1)
+     sub(/^[ \t]+/,"",value);sub(/[ \t]+$/,"",value)
+     if(key=="cf-ray"){nr++;ray=value}
+     if(key=="x-request-id"){nq++;request=value}}
+    END {
+      if(origin && nr==1 && length(ray)==20 && substr(ray,17,1)=="-" && substr(ray,1,16) !~ /[^a-f0-9]/ && substr(ray,18) !~ /[^A-Z]/)printf " cf_ray=%s",ray
+      n=split(request,parts,"-")
+      if(origin && nq==1 && n==5 && length(parts[1])==8 && length(parts[2])==4 && length(parts[3])==4 && length(parts[4])==4 && length(parts[5])==12 && request !~ /[^a-fA-F0-9-]/)printf " request_id=%s",request
+    }
+  ' "$vault_work/response.headers" >&2
+  printf '\n' >&2
+}
 vault_request() {
+  vault_started=$(date +%s)
+  vault_curl_exit=0
   # -q MUST be first: ignore .curlrc. Secrets enter via private files, never argv.
   curl -q --silent --proto '=https' --request POST --max-time 15 --connect-timeout 10 \
     --max-redirs 0 --max-filesize 8192 --header "@$vault_work/request.headers" \
     --dump-header "$vault_work/response.headers" --output "$vault_work/response" \
-    --write-out '%{http_code}' "$@" --url "$vault_endpoint" 2> "$vault_work/curl.error"
+    --write-out '%{http_code}\n%{time_namelookup}\n%{time_connect}\n%{time_appconnect}\n%{time_starttransfer}\n%{time_total}\n' \
+    "$@" --url "$vault_endpoint" > "$vault_work/metrics" 2> "$vault_work/curl.error" || vault_curl_exit=$?
+  vault_finished=$(date +%s)
+  vault_status=$(LC_ALL=C awk 'NR==1 && /^[0-9][0-9][0-9]$/ {print;exit}' "$vault_work/metrics")
+  # curl can fail before creating response headers; diagnostics must still work.
+  [ -f "$vault_work/response.headers" ] || : > "$vault_work/response.headers"
+  if [ "$vault_curl_exit" != 0 ]; then
+    vault_diagnostics
+    vault_die 'Vault transport failed. Prepare a fresh state and request a fresh link.'
+  fi
+  case "$vault_status" in 2[0-9][0-9]) ;; *)
+    vault_diagnostics
+    vault_die 'Vault request failed. Prepare a fresh state and request a fresh link.' ;;
+  esac
 }
 if [ "$vault_mode" = store ]; then
-  vault_status=$(vault_request --data-binary "@$vault_work/request.body") || vault_die 'Vault transport failed. Prepare a fresh state and request a fresh link.'
+  vault_request --data-binary "@$vault_work/request.body"
 else
-  vault_status=$(vault_request) || vault_die 'Vault transport failed. Prepare a fresh state and request a fresh link.'
+  vault_request
 fi
-case "$vault_status" in 2[0-9][0-9]) ;; *) vault_die "Vault request failed ($vault_status). Prepare a fresh state and request a fresh link." ;; esac
 if [ "$vault_mode" = store ]; then exit 0; fi
 LC_ALL=C awk -v expected="$vault_env" '
   /^HTTP\// {type="";env="";nt=0;ne=0}

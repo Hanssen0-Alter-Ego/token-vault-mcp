@@ -128,3 +128,63 @@ test('a wrong shell proof cannot burn a valid write grant, and redemption never 
  const url=new URL(grant.url),accepted=await fetchApp(new Request(f.origin+url.pathname,{method:'POST',headers:{Authorization:`Bearer ${url.hash.slice(1)}`,'X-Vault-Verifier':p.verifier,'Content-Type':'application/json'},body:JSON.stringify({token:'synthetic-proof-token'})}),f.env);
  assert.equal(accepted.status,200);assert.deepEqual(await accepted.json(),{stored:true});
 });
+
+test('failure diagnostics expose only numeric timings and final strictly formatted IDs',async t=>{
+ const f=await fixture(t);
+ f.setResponse(()=>new Response('sensitive-response-body',{status:503,headers:{
+  'CF-Ray':'a5bcdad4fbb17a72-DFW','X-Request-ID':'12345678-1234-1234-1234-123456789abc',
+  'Authorization':'Bearer sensitive-response-header','Location':'https://secret.invalid/claim#sensitive-fragment'
+ }}));
+ const p=await f.prepare(),link=f.origin+'/redeem/read#'+'a'.repeat(64);
+ const result=await execute(f.args('run',p.state,['/bin/echo','must-not-run']),{input:link,env:f.environment});
+ assert.equal(result.code,1);assert.equal(result.stdout,'');
+ assert.match(result.stderr,/curl_exit=0 started_epoch_s=\d+ finished_epoch_s=\d+ elapsed_s=\d+ http_status=503/);
+ assert.match(result.stderr,/total_s=\d+\.\d+/);assert.match(result.stderr,/cf_ray=a5bcdad4fbb17a72-DFW/);
+ assert.match(result.stderr,/request_id=12345678-1234-1234-1234-123456789abc/);
+ for(const secret of ['sensitive',p.verifier,link,'a'.repeat(64),f.origin])assert.ok(!result.stderr.includes(secret));
+ await assert.rejects(access(p.state));
+ for(const invalid of ['https://secret.invalid/claim#value','Bearer SECRET','a'.repeat(64),'a5bcdad4fbb17a72-DFW,other']) {
+  f.setResponse(()=>new Response('private',{status:403,headers:{'CF-Ray':invalid,'X-Request-ID':invalid}}));
+  const next=await f.prepare(),r=await execute(f.args('run',next.state,['/bin/true']),{input:link,env:f.environment});
+  assert.equal(r.code,1);assert.ok(!r.stderr.includes(invalid));assert.ok(!r.stderr.includes('cf_ray=')&&!r.stderr.includes('request_id='));
+ }
+});
+
+test('transport diagnostics preserve curl errno but never raw stderr, proof or body',async t=>{
+ const f=await fixture(t),bin=join(f.dir,'mock-bin');await mkdir(bin);
+ // Only synthetic local test data. Mock curl reads private files to prove none leak.
+ await writeFile(join(bin,'curl'),`#!/bin/sh
+headers='';out=''
+while [ "$#" -gt 0 ]; do
+ case "$1" in --header) shift; headers=\${1#@};; --dump-header) shift; out=$1;; esac
+ shift
+done
+cat "$headers" >&2
+printf 'https://secret.invalid/path#private-body\\n' >&2
+printf 'HTTP/1.1 200 Connection established\\r\\nCF-Ray: 1111111111111111-DFW\\r\\n\\r\\nHTTP/2 503\\r\\nCF-Ray: malformed-secret\\r\\n\\r\\n' > "$out"
+printf '000\\n0.000001\\n0.000000\\n0.000000\\n0.000000\\n10.001234\\n'
+exit 28
+`,{mode:0o700});
+ const p=await f.prepare(),link=f.origin+'/redeem/read#'+'b'.repeat(64);
+ const result=await execute(f.args('run',p.state,['/bin/echo','must-not-run']),{input:link,env:{...f.environment,PATH:bin+':'+process.env.PATH}});
+ assert.equal(result.code,1);assert.equal(result.stdout,'');assert.match(result.stderr,/curl_exit=28/);assert.match(result.stderr,/total_s=10.001234/);
+ for(const secret of [p.verifier,'b'.repeat(64),'secret.invalid','private-body','malformed-secret','1111111111111111'])assert.ok(!result.stderr.includes(secret));
+ await assert.rejects(access(p.state));assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
+});
+
+test('store transport failure before headers exists never discloses the source token',async t=>{
+ const f=await fixture(t),bin=join(f.dir,'mock-store-bin');await mkdir(bin);
+ await writeFile(join(bin,'curl'),`#!/bin/sh
+while [ "$#" -gt 0 ]; do
+ case "$1" in --header|--data-binary) shift; cat "\${1#@}" >&2;; esac
+ shift
+done
+printf '000\\n0.000000\\n0.000000\\n0.000000\\n0.000000\\n0.000001\\n'
+exit 6
+`,{mode:0o700});
+ const p=await f.prepare(),token='synthetic-store-secret',link=f.origin+'/redeem/write#'+'c'.repeat(64);
+ const result=await execute(f.args('store',p.state),{input:link,env:{...f.environment,PATH:bin+':'+process.env.PATH,GH_TOKEN:token}});
+ assert.equal(result.code,1);assert.equal(result.stdout,'');assert.match(result.stderr,/curl_exit=6/);assert.match(result.stderr,/http_status=000/);
+ for(const secret of [token,p.verifier,link,'c'.repeat(64)])assert.ok(!result.stderr.includes(secret));
+ await assert.rejects(access(p.state));assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
+});
