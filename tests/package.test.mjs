@@ -23,7 +23,9 @@ test('packaged SKILL includes the exact verified helper and its runnable prepare
  const integrity=JSON.parse(extract(archive,'skills/token-vault/references/helper-integrity.json'));assert.equal(integrity.sha256,createHash('sha256').update(helper).digest('hex'));
  assert.equal(spawnSync('/bin/sh',['-n'],{input:helper}).status,0);
  const listing=spawnSync('tar',['-tzf',archive],{encoding:'utf8'}).stdout;
- assert.equal(listing.split('\n').filter(path=>path.includes('scripts/')&&!path.endsWith('/')).length,1);
+ assert.equal(listing.split('\n').filter(path=>path.includes('scripts/')&&!path.endsWith('/')).length,2);
+ const offline=extract(archive,'skills/token-vault/scripts/vault-envelope.mjs');assert.equal(offline,await readFile('cli/vault-envelope.mjs','utf8'));
+ const offlineIntegrity=JSON.parse(extract(archive,'skills/token-vault/references/envelope-helper-integrity.json'));assert.equal(offlineIntegrity.sha256,createHash('sha256').update(offline).digest('hex'));
  assert.ok(!listing.includes('vault-cli.mjs')&&!listing.includes('shell-helper-integrity.json')&&!listing.includes('vault-upload.sh'));
  assert.match(extract(archive,'skills/token-vault/SKILL.md'),/--state/);assert.match(extract(archive,'skills/token-vault/SKILL.md'),/claimChallenge/);
  assert.equal(spawnSync('tar',['-xzf',archive,'-C',dir]).status,0);

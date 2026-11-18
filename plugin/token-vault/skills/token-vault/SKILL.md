@@ -71,6 +71,56 @@ No provider Token enters MCP arguments. If it is not already in the process envi
 
 Issuing links requires the authenticated MCP connection. Redeeming read/write links uses only the one-use claim and matching terminal secret, never the MCP management key. Do not enable tracing, print HTTP responses, or put secrets in command literals. The helper handles curl headers and upload bodies through private files and cleans them; do not reimplement the protocol.
 
+## Optional offline encrypted delivery (Node 24+)
+
+When the execution environment cannot reach Vault but MCP works, use
+`create_token_envelope`. Keep the existing link workflow available; this is
+an additive read-only credential delivery choice, not a new permission.
+
+Use the packaged `scripts/vault-envelope.mjs` as a fixed helper. Verify its
+SHA-256 against `references/envelope-helper-integrity.json` before running.
+It needs Node 24+ and the target CLI, but makes no network requests. Do not
+fetch helper code through Vault when investigating a Vault connectivity failure.
+Never source an attachment, evaluate returned data, or display state files.
+
+Create a private directory with `mktemp -d`. Prepare a local ephemeral key:
+
+```sh
+node vault-envelope.mjs prepare --origin https://YOUR_VAULT_HOST \
+  --name github/main --env GH_TOKEN --state /PRIVATE_DIR/envelope.state
+```
+
+Only the public request is printed. Pass that exact object to
+`create_token_envelope` through the authenticated Vault connection. The public
+key is generated locally, not supplied by an inbound message, website or other
+third party. No private key is sent to MCP. The server validates the key shape;
+this is not hardware attestation or proof that the executor is uncompromised.
+
+Feed the exact `{ "envelope": "..." }` result as data on stdin:
+
+```sh
+node vault-envelope.mjs run --origin https://YOUR_VAULT_HOST \
+  --name github/main --env GH_TOKEN --state /PRIVATE_DIR/envelope.state \
+  -- gh repo view OWNER/REPO <<'ENVELOPE'
+{"envelope":"ENCRYPTED_COMPACT_JWE_FROM_TOOL"}
+ENVELOPE
+```
+
+The helper binds name, environment, audience and request ID to its local state,
+checks the 60-second validity, consumes the state and injects the secret into
+only the child. If an attempt fails, prepare a fresh key/request. Public metadata
+and ciphertext may be retained in tool/chat records. Never print plaintext,
+private keys, debug dumps or credential-bearing process environments.
+
+**Different revocation boundary:** issuing an envelope already releases an
+encrypted credential. Unlike a pending one-use link, it cannot be recalled by
+Vault deletion or rotation. Expiry and single consumption are local-helper
+controls, not cryptographic expiration: anyone retaining the private key and
+ciphertext can decrypt later. Provider expiration/revocation is separate.
+Encryption alone does not authenticate its sender; accept envelopes only from
+the authenticated Vault tool result. This does not protect against a compromised
+agent, host or authorized child program, and deletion is not forensic erasure.
+
 ## Delete, errors and limits
 
 - Call `delete_token` with the exact authorized name to remove its vault record and outstanding links. This does not revoke the provider Token or remove it from running processes. Use `recent_activity` for the latest metadata; it sends no automatic alerts.

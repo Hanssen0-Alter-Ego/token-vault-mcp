@@ -9,3 +9,8 @@ await mkdir(`${skill}/references`,{recursive:true});
 await mkdir(`${skill}/scripts`,{recursive:true});
 await writeFile(`${skill}/references/helper-integrity.json`,JSON.stringify({algorithm:'sha256',sha256:hash},null,2)+'\n');
 await copyFile('cli/vault-cli.sh',`${skill}/scripts/vault-cli.sh`);
+
+// Offline helper is packaged separately; existing shell helper hashes remain unchanged.
+const envelopeSource=await readFile('cli/vault-envelope.mjs','utf8');
+await copyFile('cli/vault-envelope.mjs',`${skill}/scripts/vault-envelope.mjs`);
+await writeFile(`${skill}/references/envelope-helper-integrity.json`,JSON.stringify({algorithm:'sha256',sha256:createHash('sha256').update(envelopeSource).digest('hex')},null,2)+'\n');

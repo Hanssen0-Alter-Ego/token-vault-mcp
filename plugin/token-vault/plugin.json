@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "token-vault",
-  "version": "0.5.1",
-  "description": "Use named credentials through short-lived, one-use links and run real CLI commands without placing durable tokens in MCP messages.",
+  "version": "0.6.0",
+  "description": "Use named credentials through one-use links or encrypted offline envelopes without placing plaintext tokens in MCP messages.",
   "author": {
     "name": "Hanssen0-Alter-Ego"
   },
@@ -12,7 +12,7 @@
       "interface": {
         "displayName": "Token Vault",
         "shortDescription": "私有凭据与一次性领取",
-        "longDescription": "Connect your own Token Vault. Agents request one-use links, receive credentials directly in command processes, and run actual CLIs. Supports direct credential upload from process environments. Requires a connected vault and a terminal-capable agent.",
+        "longDescription": "Connect your own Token Vault. Use the original one-use CLI links or optional offline encrypted envelopes with the packaged Node helper. Requires a connected vault, an authorized task and a terminal-capable agent.",
         "developerName": "Hanssen0-Alter-Ego",
         "category": "Developer Tools",
         "capabilities": [

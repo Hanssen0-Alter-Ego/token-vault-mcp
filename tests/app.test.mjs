@@ -13,14 +13,14 @@ test('MCP requires Bearer or secret URL path; fragments and forged identity do n
  assert.equal((await fetchApp(request(env,'/mcp',options),env)).status,401);
  assert.equal((await fetchApp(request(env,`/mcp#${env.MCP_ACCESS_KEY}`,options),env)).status,401);
  assert.equal((await fetchApp(request(env,'/mcp',{...options,headers:{...options.headers,'oai-authenticated-user-id':'forged'}}),env)).status,401);
- const good=await fetchApp(request(env,`/mcp/${env.MCP_ACCESS_KEY}`,options),env);assert.equal(good.status,200);assert.equal((await good.json()).result.tools.length,5);
+ const good=await fetchApp(request(env,`/mcp/${env.MCP_ACCESS_KEY}`,options),env);assert.equal(good.status,200);assert.equal((await good.json()).result.tools.length,6);
  assert.equal((await fetchApp(request(env,'/mcp',{...options,headers:{...options.headers,Authorization:`Bearer ${env.MCP_ACCESS_KEY}`,Origin:'https://evil.example'}}),env)).status,403);
 });
 test('official MCP SDK initializes, discovers tools, calls a read tool and rejects invalid authentication',async()=>{
  const env=fixture(),client=new Client({name:'vault-verification',version:'1.0.0'});
  const transport=new StreamableHTTPClientTransport(new URL(`${env.PUBLIC_ORIGIN}/mcp/${env.MCP_ACCESS_KEY}`),{fetch:(url,init)=>fetchApp(new Request(url,init),env)});
  await client.connect(transport);
- assert.equal((await client.listTools()).tools.length,5);
+ assert.equal((await client.listTools()).tools.length,6);
  const verifier=randomBytes(32).toString('base64url');
  const claimChallenge=createHash('sha256').update(verifier).digest('base64url');
  const upload=await client.callTool({name:'create_token_write_link',arguments:{name:'sdk/token',envVar:'GH_TOKEN',claimChallenge}});
@@ -71,7 +71,7 @@ test('manual upload uses only Bearer MCP auth, stores or explicitly replaces tok
  const received=await claim(read.url,fresh.verifier);assert.equal(received.status,200);assert.equal(await received.text(),newer);assert.equal(received.headers.get('X-Vault-Env'),'OPENAI_API_KEY');
  const toolResponse=await fetchApp(request(env,'/mcp',{method:'POST',headers:{Authorization:`Bearer ${env.MCP_ACCESS_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}),env);
  const names=(await toolResponse.json()).result.tools.map(tool=>tool.name);
- assert.deepEqual(names.sort(),['create_token_read_link','create_token_write_link','delete_token','list_tokens','recent_activity']);
+ assert.deepEqual(names.sort(),['create_token_envelope','create_token_read_link','create_token_write_link','delete_token','list_tokens','recent_activity']);
  const audit=JSON.stringify((await (await rpc(env,'recent_activity')).json()).result.structuredContent);
  for(const secret of [value,newer,env.MCP_ACCESS_KEY,fresh.verifier])assert.ok(!audit.includes(secret));
 });

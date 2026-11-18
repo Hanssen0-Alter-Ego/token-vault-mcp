@@ -240,3 +240,36 @@ npx wrangler deploy --dry-run
 ```
 
 测试使用随机/合成凭据，覆盖 MCP SDK、认证、脚本真实 HTTPS 上传和领取、环境注入、临时文件清理、错误 secret、单次消费、过期/重放、覆盖/删除、手动上传认证、旧数据库升级和打包。包含无 Node/Python/jq/Bash 的 helper 运行测试；不会验证真实服务商 Token 或各产品的终端能力。
+
+## Optional offline encrypted credential delivery
+
+When MCP can reach the Vault but the execution environment cannot, the additive
+`create_token_envelope` tool returns a compact JWE (`RSA-OAEP-256` / `A256GCM`)
+for a fresh locally generated RSA-3072 public key. The fixed, dependency-free
+`cli/vault-envelope.mjs` helper requires Node 24+, makes no network requests,
+and injects the decrypted credential only into the requested child process.
+It never sources a script or evaluates returned content. The original POSIX
+shell one-use-link read/write workflow remains unchanged.
+
+Apply migration `0003_envelope_issuance.sql`, upgrade the server, rebuild/update
+the plugin and refresh its tools before use. The plugin packages both helpers
+and their SHA-256 integrity manifests. See its Skill for prepare/run commands.
+No additional provider permissions or persistent credential storage are needed.
+
+The authenticated MCP gate authorizes release; the public key is validated and
+bound to the request, not attested. Use only the public request produced by the
+trusted local helper. Issuance is limited to 20 per owner per minute, duplicate
+request/key metadata is retained for five minutes, and successful release is
+audited as `read.envelope_issued` before any ciphertext is returned. Plaintext,
+private keys and ciphertext are not written to the audit database.
+
+Ciphertext and public metadata may appear in tool/chat records. They are not a
+secret-free artifact: protect the matching local private key. Envelopes cannot
+be recalled after issuance. The 60-second expiry and one-use state consumption
+are helper controls, not cryptographic expiration or server-enforced redemption.
+A retained private key can decrypt retained ciphertext later, even after Vault
+deletion. Provider revocation/expiration remains necessary to invalidate the
+credential itself. Public-key encryption does not independently authenticate
+the sender; this flow trusts the authenticated MCP response. It does not protect
+against a compromised local agent, host or child program. Private-state deletion
+is best-effort cleanup, not guaranteed erasure from disk or JavaScript memory.

@@ -1,3 +1,4 @@
+import {validateEnvelopeRequest,sealEnvelope} from "./envelope";
 import {CLI_SHA256} from "./cli-integrity";
 import { AppError, validateName, validateSecret, validateEnvVar, encryptSecret, decryptSecret, redemptionOrigin, newTicket, ticketHash, validateClaimChallenge, verifierChallenge } from "./security";
 type Row = { id: string; user_id: string; name: string; env_var: string; encrypted_token: string; revision: string; created_at: string; updated_at: string };
@@ -57,6 +58,22 @@ export class VaultService {
     const ticket = newTicket(), hash = await ticketHash(ticket), expires = now + 60000;
     await this.db.batch([this.db.prepare("INSERT INTO handoffs(hash,user_id,name,kind,config,expires_at) VALUES(?,?,?,?,?,?)").bind(hash,user,name,kind,JSON.stringify(config),expires),this.audit(user,name,`${kind}.link_issued`)]);
     return { url: `${origin}/redeem/${kind}#${ticket}`, method: "POST", helper: { url: `${origin}/vault-cli.sh`, sha256: CLI_SHA256 }, expiresAt: new Date(expires).toISOString(), oneTime: true, proofRequired: true, proofMethod: "S256", envVar: kind === "read" ? existing!.env_var : input.envVar, instruction: "Sensitive one-time link. The matching terminal-held verifier is mandatory; never send it through MCP or chat. Use the CLI helper immediately; fragment is the Bearer claim, never send the fragment in a query/path. Do not print the response, enable tracing, or store the token. A lost response requires a fresh link. This link does not expire the provider token or stop a process already holding it. Use the packaged sh helper with curl and openssl." };
+  }
+  async envelope(user:string,input:unknown) {
+    const request=await validateEnvelopeRequest(input,this.origin);
+    const row=await this.record(user,request.name);
+    if(!row)throw new AppError("找不到凭据。",404);
+    validateEnvVar(row.env_var);
+    const now=this.clock();
+    await this.db.prepare("DELETE FROM envelope_issuance WHERE issued_at <= ?").bind(now-300000).run();
+    // One atomic statement enforces the per-owner 20/minute issuance budget.
+    const reserved=await this.db.prepare("INSERT INTO envelope_issuance(user_id,request_id,key_fingerprint,issued_at) SELECT ?,?,?,? WHERE (SELECT COUNT(*) FROM envelope_issuance WHERE user_id=? AND issued_at>?)<20 ON CONFLICT DO NOTHING RETURNING request_id").bind(user,request.requestId,request.fingerprint,now,user,now-60000).first();
+    if(!reserved)throw new AppError("Envelope request/key already used or issuance limit reached; prepare a fresh key and retry later.",429);
+    const token=await decryptSecret(row.encrypted_token,`${user}:${row.id}`,this.key);
+    const envelope=await sealEnvelope(request.key,{name:row.name,envVar:row.env_var,audience:request.audience,requestId:request.requestId,issuedAt:now,expiresAt:now+60000},token);
+    // Issuance is release, not a pending claim. Audit must succeed before returning.
+    await this.audit(user,request.name,"read.envelope_issued").run();
+    return {envelope};
   }
   async redeem(kind: "read" | "write", ticket: string, token?: unknown, verifier?: unknown) {
     // Validate upload before claiming; malformed uploads must never overwrite a saved credential.

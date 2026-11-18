@@ -1,6 +1,6 @@
 {
   "name": "token-vault-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,12 +15,12 @@
     "cf:secrets": "node scripts/cf-secrets.mjs",
     "plugin:build": "node scripts/package-plugin.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261019.1",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "24.7.2",
     "esbuild": "0.28.2",
+    "miniflare": "5.20261019.0-beta",
     "typescript": "5.9.3",
     "wrangler": "4.151.2"
   }
