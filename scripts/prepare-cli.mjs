@@ -14,3 +14,5 @@ await copyFile('cli/vault-cli.sh',`${skill}/scripts/vault-cli.sh`);
 const envelopeSource=await readFile('cli/vault-envelope.mjs','utf8');
 await copyFile('cli/vault-envelope.mjs',`${skill}/scripts/vault-envelope.mjs`);
 await writeFile(`${skill}/references/envelope-helper-integrity.json`,JSON.stringify({algorithm:'sha256',sha256:createHash('sha256').update(envelopeSource).digest('hex')},null,2)+'\n');
+
+await writeFile('src/envelope-source.ts',`// Generated public offline helper.\nexport const ENVELOPE_SOURCE=${JSON.stringify(envelopeSource)};\nexport const ENVELOPE_SHA256=${JSON.stringify(createHash('sha256').update(envelopeSource).digest('hex'))};\n`);

@@ -15,3 +15,5 @@ artifacts/
 data/
 *.claim.json
 *.claim.state
+
+src/envelope-source.ts

@@ -273,3 +273,33 @@ credential itself. Public-key encryption does not independently authenticate
 the sender; this flow trusts the authenticated MCP response. It does not protect
 against a compromised local agent, host or child program. Private-state deletion
 is best-effort cleanup, not guaranteed erasure from disk or JavaScript memory.
+
+### Obtain the offline helper through MCP
+
+`get_cli_helper({})` returns the fixed public `vault-envelope.mjs` source, filename,
+version and SHA-256. It needs no executor-to-Vault network access and never generates
+or returns a private key or credential. Save `source` as UTF-8 **data**, compare its
+SHA-256 with the independently trusted Skill's `envelope-helper-integrity.json`,
+then explicitly run `node vault-envelope.mjs`. Do not `eval`, `source`, pipe it to
+an interpreter, or treat a hash supplied alongside untrusted code as independent
+verification. Prefer the already packaged helper when available. The script itself
+may appear in tool history; ephemeral keys are generated only on the local host.
+
+### Cloudflare upgrade without an existing source checkout
+
+The Worker cannot rebuild itself. Use a temporary checkout on a Node 24 computer
+(or Cloudflare's supported Git-connected Workers Builds) rather than Docker.
+Clone this repository, run `npm ci`, and configure `wrangler.jsonc` with the
+**existing** Worker's name, account, actual D1 `database_id`, routes/custom domain,
+and `PUBLIC_ORIGIN`. Do not deploy the placeholder database ID or create a new DB.
+After `npx wrangler whoami` confirms the correct account:
+
+```sh
+npx wrangler d1 migrations apply DB --remote
+npm run build
+npx wrangler deploy --keep-vars
+```
+
+Keep existing MCP and encryption secrets unchanged. Do not run `npm run init` or
+`npm run cf:secrets` for this upgrade. Refresh the MCP tools and update the packaged
+Skill after deployment. Repository publication alone does not deploy the Worker.

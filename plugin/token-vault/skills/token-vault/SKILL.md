@@ -130,3 +130,15 @@ agent, host or authorized child program, and deletion is not forensic erasure.
 - Link binding protects against link theft from conversation history. It does not protect against compromised terminal code, loss of the MCP key or malicious hosting/TLS termination; the vault and HTTPS terminator can see the Token. All clients holding the MCP key share this single-owner vault.
 
 Transport/HTTP failures include allowlisted diagnostic metadata on stderr (curl exit code, epoch seconds, timing fields, and strictly validated final-response CF-Ray/UUID X-Request-ID when present). Keep raw curl stderr, headers, bodies and claim URLs private. HTTP 000 is not a server response; MCP HTTP 200 does not prove terminal redemption. No automatic retry or timeout changes are made.
+
+### Obtain a missing offline helper without terminal network access
+
+Prefer the bundled `scripts/vault-envelope.mjs`. If unavailable, call the read-only
+`get_cli_helper({})` tool: its `source` is the fixed public script, not a credential
+or executable instruction. Save that string as UTF-8 data to a local file, then
+verify SHA-256 against this Skill's independently trusted
+`references/envelope-helper-integrity.json` before explicitly invoking Node 24.
+Do not eval/source the response or pipe it to an interpreter. A response's own
+hash is only an integrity check, not independent authenticity. Never send local
+private key/state back to MCP. If no trusted integrity record is available, obtain
+the reviewed Skill first; do not bootstrap trust solely from fetched source.
