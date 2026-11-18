@@ -1,20 +1,18 @@
 # Token Vault MCP
 
-让 Agent 使用你保存的 Token 执行真正的 `gh` 等 CLI。Agent 通过 MCP 申请 **60 秒有效、只能领取一次** 的链接，再由终端脚本把 Token 放进命令进程的环境变量。长期 Token 不经过 MCP 参数或响应。
-
-Agent 每次操作都先在终端生成随机 secret，MCP 只收到它的 S256 哈希。领取时必须同时持有一次性链接和终端 secret，单独拿到对话历史中的链接无法领取。
+让 Agent 使用你保存的 Token 执行 `gh` 等 CLI。读取通过本地临时密钥和 MCP 加密信封完成，固定 Node 24 helper 离线解密并只注入目标子进程；明文 Token 和私钥不经过 MCP。上传仍使用绑定终端 secret 的一次性写入链接。
 
 ## 能力与依赖
 
 | 项目 | 当前能力 |
 | --- | --- |
 | 凭据 | 按名称保存、覆盖、列出元数据、删除；所有保存的凭据均可领取，无需开启开关 |
-| CLI | 用一次性链接注入 `GH_TOKEN`、`OPENAI_API_KEY` 等环境变量，再执行指定命令 |
+| CLI | 用加密信封注入 `GH_TOKEN`、`OPENAI_API_KEY` 等环境变量，再执行指定命令 |
 | 上传 | Agent 用一次性链接上传；用户可用 MCP 管理密钥直接手动上传 |
 | 记录 | 手动查看最近 40 条活动元数据，无自动提醒 |
 | Cloudflare | 一个 Worker + 一个 D1 数据库 |
 | 自有服务器 | 一个 Docker 容器 + SQLite 持久卷，外部提供 HTTPS |
-| Agent 环境 | POSIX `sh`、curl 7.55+、openssl、常见 Unix 工具、出站 HTTPS、目标 CLI |
+| Agent 环境 | 读取：Node 24+、目标 CLI；上传另需 POSIX `sh`、curl 7.55+、openssl、出站 HTTPS |
 | 构建与打包 | Node.js 24+、npm；打包另需 `tar`。Docker 运行时的 Node 已在镜像内 |
 
 这是**单所有者金库**：持有 MCP 连接密钥的客户端共享整个金库。没有网页管理后台；MCP 不提供终端、不安装 CLI、不授予服务商权限、不代理服务商 API。ChatGPT 网页、Dot、Codex 是否能执行命令，取决于对应会话实际提供的终端与网络能力。
@@ -138,21 +136,18 @@ npm run plugin:build -- https://YOUR_VAULT_HOST --public
 | --- | --- |
 | `list_tokens` | 列出元数据及 `helper.url` / `helper.sha256`，不返回 Token |
 | `create_token_write_link` | 签发新建或覆盖凭据的上传链接 |
-| `create_token_read_link` | 为指定凭据签发一次性领取链接 |
+| `create_token_envelope` | 将指定凭据加密给本地临时公钥 |
+| `get_cli_helper` | 通过 MCP 获取固定公开解密 helper |
 | `delete_token` | 删除金库记录并作废待领取链接 |
 | `recent_activity` | 查看最近活动，不含 Token、secret 或领取链接 |
 
-一次操作分三步，同一个终端文件系统中完成：
+读取：`node vault-envelope.mjs prepare` 生成本地私钥及公开请求 → MCP `create_token_envelope` → 同 helper `run -- command args` 从 stdin 接收密文并执行。详见下方及 Skill。
 
-1. 运行 `sh vault-cli.sh prepare`，生成私有 state 文件，只输出公开的 `claimChallenge`。
-2. MCP 用该哈希签发读或写链接，60 秒计时从此刻开始。
-3. 把链接通过标准输入交给同一脚本：`run -- command args` 领取并执行 CLI，或 `store` 上传环境变量中的凭据。
-
-脚本路径按实际安装位置填写；仓库中的入口为 `cli/vault-cli.sh`。若终端不能访问插件文件，从 `list_tokens` 的 `helper.url` 下载，先与 SKILL 的 `references/helper-integrity.json` 核对 SHA-256，再执行。只使用 `sh`，不要 source 脚本或 state 文件。
+上传：`sh vault-cli.sh prepare` → MCP `create_token_write_link` → 同 shell helper `store` 上传环境变量中的凭据。不要 source 脚本或状态文件。
 
 Agent 上传时，Token 必须已在执行 `store` 的进程环境中；个人终端的变量不会自动出现在云端 Agent 中。首次保存也可由你使用下方手动接口完成，不发到聊天。同名覆盖需用户授权和 `overwrite:true`，可同时修改环境变量名。成功领取后，Token 仅注入指定命令及其子进程；不修改父 Shell、不执行持久登录。
 
-读取链接只需要 `name` 和 `claimChallenge`。上传链接增加 `envVar`，覆盖时再加 `overwrite:true`；无需服务分类、用途说明或允许领取的开关。`list_tokens` 仅返回凭据名称、环境变量名和更新时间。
+上传链接需要 `name`、`claimChallenge` 和 `envVar`，覆盖时再加 `overwrite:true`；无需服务分类、用途说明或允许领取的开关。`list_tokens` 仅返回凭据名称、环境变量名和更新时间。
 
 ## 用户手动上传：一次请求
 
@@ -220,7 +215,8 @@ sh vault-upload.sh --origin https://YOUR_VAULT_HOST openai/main OPENAI_API_KEY
 git pull --ff-only
 npm ci
 npx wrangler d1 migrations apply DB --remote
-npm run cf:deploy
+npm run build
+npx wrangler deploy --keep-vars
 npm run plugin:build
 ```
 
@@ -228,7 +224,7 @@ Docker 部署只需拉取代码后运行 `docker compose up -d --build`，启动
 
 **升级到 0.5.0 必须应用 `0002_simplify_credentials.sql`。** 它删除允许领取开关、服务分类、用途和固定审计字段；保留已有凭据的 ID、加密内容及活动记录，不重置密钥。原先禁止 Agent 领取的记录也会变为可领取。未完成的一次性链接会清理，重新申请即可。
 
-Cloudflare 先迁移再部署，两步之间旧服务可能短暂不可用；请连续完成。迁移后不要直接运行旧版服务。helper 沿用原 sh 脚本，哈希不变。新增手动上传接口不会改变 Agent 的一次性链接流程。
+Cloudflare 先迁移再部署，两步之间旧服务可能短暂不可用；请连续完成。迁移后不要直接运行旧版服务。0.5.0 的 helper 沿用当时的 sh 脚本，哈希不变；0.7.0 上传 helper 的新 hash 见下文。新增手动上传接口不会改变 Agent 的一次性链接流程。
 
 ## 开发检查
 
@@ -241,15 +237,15 @@ npx wrangler deploy --dry-run
 
 测试使用随机/合成凭据，覆盖 MCP SDK、认证、脚本真实 HTTPS 上传和领取、环境注入、临时文件清理、错误 secret、单次消费、过期/重放、覆盖/删除、手动上传认证、旧数据库升级和打包。包含无 Node/Python/jq/Bash 的 helper 运行测试；不会验证真实服务商 Token 或各产品的终端能力。
 
-## Optional offline encrypted credential delivery
+## Encrypted credential delivery
 
-When MCP can reach the Vault but the execution environment cannot, the additive
+For every credential read, the
 `create_token_envelope` tool returns a compact JWE (`RSA-OAEP-256` / `A256GCM`)
 for a fresh locally generated RSA-3072 public key. The fixed, dependency-free
 `cli/vault-envelope.mjs` helper requires Node 24+, makes no network requests,
 and injects the decrypted credential only into the requested child process.
-It never sources a script or evaluates returned content. The original POSIX
-shell one-use-link read/write workflow remains unchanged.
+It never sources a script or evaluates returned content. The POSIX shell helper
+retains only prepare/store for uploading credentials.
 
 Apply migration `0003_envelope_issuance.sql`, upgrade the server, rebuild/update
 the plugin and refresh its tools before use. The plugin packages both helpers
@@ -303,3 +299,13 @@ npx wrangler deploy --keep-vars
 Keep existing MCP and encryption secrets unchanged. Do not run `npm run init` or
 `npm run cf:secrets` for this upgrade. Refresh the MCP tools and update the packaged
 Skill after deployment. Repository publication alone does not deploy the Worker.
+
+### 0.7.0: retire legacy reads
+
+`create_token_read_link` and `vault-cli.sh run` are removed. `/redeem/read`
+returns 410 without accessing credentials, including for previously issued links.
+Migrate callers to encrypted envelopes before deployment. There are six MCP tools.
+No additional database migration or credential re-encryption is needed when
+upgrading from 0.6.1; existing write grants and stored data remain compatible.
+The upload helper hash changes: update its trusted Skill together with the server.
+The envelope helper/hash is unchanged. Never run initialization or regenerate keys.

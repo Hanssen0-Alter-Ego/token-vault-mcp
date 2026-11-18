@@ -1,6 +1,6 @@
 #!/bin/sh
 # POSIX sh helper. Extra runtime dependencies: curl and openssl (no Node/Python/jq).
-# Never source this file. Run: sh vault-cli.sh prepare|run|store ...
+# Never source this file. Run: sh vault-cli.sh prepare|store ...
 set +x
 set -eu
 umask 077
@@ -20,14 +20,13 @@ vault_cleanup() {
 }
 trap 'vault_cleanup' 0
 trap 'exit 1' 1 2 3 15
-vault_usage='Usage: sh vault-cli.sh prepare|run|store --origin https://vault.example --env GH_TOKEN --state /private/claim.state [-- command args]'
+vault_usage='Usage: sh vault-cli.sh prepare|store --origin https://vault.example --env GH_TOKEN --state /private/claim.state'
 [ "$#" -gt 0 ] || vault_die "$vault_usage"
 vault_mode=$1; shift
-case "$vault_mode" in prepare|run|store) ;; *) vault_die "$vault_usage" ;; esac
+case "$vault_mode" in prepare|store) ;; *) vault_die "$vault_usage" ;; esac
 vault_origin='' vault_env=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --) shift; break ;;
     --origin|--env|--state)
       [ "$#" -ge 2 ] || vault_die "$vault_usage"
       case "$1" in
@@ -51,8 +50,7 @@ printf '%s\n' "$vault_origin" | LC_ALL=C awk '
 case "$vault_env" in ''|[!A-Z]*|*[!A-Z0-9_]*|PATH|HOME|SHELL|ENV|BASH_ENV|IFS|NODE_OPTIONS|PYTHONPATH|PYTHONSTARTUP|LD_*|DYLD_*) vault_die 'Invalid credential environment variable.' ;; esac
 [ "${#vault_env}" -le 64 ] || vault_die 'Invalid credential environment variable.'
 case "$vault_state" in /*) ;; *) vault_die 'Use an absolute state path inside a private directory.' ;; esac
-if [ "$vault_mode" = run ]; then [ "$#" -gt 0 ] || vault_die 'A child command is required.'
-else [ "$#" = 0 ] || vault_die "$vault_usage"; fi
+[ "$#" = 0 ] || vault_die "$vault_usage"
 
 # GNU/Linux and macOS stat have different flags. Read metadata only, never source state.
 vault_metadata() {
@@ -85,9 +83,7 @@ if [ "$vault_mode" = prepare ]; then
 fi
 
 vault_link=$(cat)
-vault_kind=write
-[ "$vault_mode" != run ] || vault_kind=read
-vault_endpoint="$vault_origin/redeem/$vault_kind"
+vault_endpoint="$vault_origin/redeem/write"
 vault_claim=${vault_link##*#}
 case "$vault_claim" in *[!a-f0-9]*) vault_die 'Link does not match the configured vault and operation.' ;; esac
 [ "${#vault_claim}" = 64 ] && [ "$vault_link" = "$vault_endpoint#$vault_claim" ] || vault_die 'Link does not match the configured vault and operation.'
@@ -115,19 +111,17 @@ vault_valid_token_file() {
   LC_ALL=C tr -d '\000\012\015' < "$1" > "$vault_work/checked"
   cmp -s "$1" "$vault_work/checked"
 }
-if [ "$vault_mode" = store ]; then
-  # Only the variable name enters eval; its strict allowlist above prevents code injection.
-  # The provider value is expanded once inside a quoted assignment, never evaluated as code.
-  eval 'vault_token="${'"$vault_env"'-}"'
-  printf '%s' "$vault_token" > "$vault_work/source"
-  vault_valid_token_file "$vault_work/source" || vault_die 'Source credential environment variable is missing or invalid.'
-  LC_ALL=C awk '
-    BEGIN {printf "{\"token\":\"";for(i=1;i<32;i++)escape[sprintf("%c",i)]=sprintf("\\u%04x",i)}
-    {for(i=1;i<=length($0);i++){c=substr($0,i,1);if(c=="\\")printf "%s","\\\\";else if(c=="\"")printf "%s","\\\"";else if(c in escape)printf "%s",escape[c];else printf "%s",c}}
-    END {printf "\"}"}
-  ' "$vault_work/source" > "$vault_work/request.body"
-  printf 'Content-Type: application/json\n' >> "$vault_work/request.headers"
-fi
+# Only the variable name enters eval; its strict allowlist above prevents code injection.
+# The provider value is expanded once inside a quoted assignment, never evaluated as code.
+eval 'vault_token="${'"$vault_env"'-}"'
+printf '%s' "$vault_token" > "$vault_work/source"
+vault_valid_token_file "$vault_work/source" || vault_die 'Source credential environment variable is missing or invalid.'
+LC_ALL=C awk '
+  BEGIN {printf "{\"token\":\"";for(i=1;i<32;i++)escape[sprintf("%c",i)]=sprintf("\\u%04x",i)}
+  {for(i=1;i<=length($0);i++){c=substr($0,i,1);if(c=="\\")printf "%s","\\\\";else if(c=="\"")printf "%s","\\\"";else if(c in escape)printf "%s",escape[c];else printf "%s",c}}
+  END {printf "\"}"}
+' "$vault_work/source" > "$vault_work/request.body"
+printf 'Content-Type: application/json\n' >> "$vault_work/request.headers"
 
 # Diagnostics contain only locally generated numbers/times and strictly formatted IDs.
 # Never expose curl stderr: it may contain URLs, proxy credentials or response data.
@@ -177,22 +171,4 @@ vault_request() {
     vault_die 'Vault request failed. Prepare a fresh state and request a fresh link.' ;;
   esac
 }
-if [ "$vault_mode" = store ]; then
-  vault_request --data-binary "@$vault_work/request.body"
-else
-  vault_request
-fi
-if [ "$vault_mode" = store ]; then exit 0; fi
-LC_ALL=C awk -v expected="$vault_env" '
-  /^HTTP\// {type="";env="";nt=0;ne=0}
-  {sub(/\r$/,"");p=index($0,":");if(p){key=tolower(substr($0,1,p-1));value=substr($0,p+1);sub(/^[ \t]+/,"",value);sub(/[ \t]+$/,"",value);if(key=="content-type"){type=tolower(value);nt++}if(key=="x-vault-env"){env=value;ne++}}}
-  END {exit !(nt==1&&index(type,"text/plain")==1&&ne==1&&env==expected)}
-' "$vault_work/response.headers" || vault_die 'Unexpected token response or environment name mismatch.'
-vault_valid_token_file "$vault_work/response" || vault_die 'Invalid token response.'
-vault_token=$(cat "$vault_work/response")
-vault_cleanup || vault_die 'Cannot remove private claim files; delete them locally.'
-unset vault_verifier vault_claim vault_link
-export "$vault_env=$vault_token"
-unset vault_token
-# All private files are gone before the target process starts. Preserve its exit code.
-exec "$@"
+vault_request --data-binary "@$vault_work/request.body"

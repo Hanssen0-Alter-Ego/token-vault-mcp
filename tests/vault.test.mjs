@@ -22,89 +22,68 @@ function fixture(origin='https://claim.example') {
 }
 const input={name:'github/main',envVar:'GH_TOKEN',token:'synthetic-token-only'};
 const claim=link=>new URL(link.url).hash.slice(1);
-test('users can only issue links for their own credentials and metadata never contains ciphertext or token',async()=>{
+const fields={name:input.name,envVar:input.envVar,claimChallenge};
+test('metadata is owner-isolated and secret-free; writes require explicit overwrite',async()=>{
  const {service}=fixture();await service.save('alice',input);
- assert.equal((await service.list('bob')).length,0);
- await assert.rejects(service.issue('bob','read',{name:input.name,claimChallenge}));
+ assert.deepEqual(await service.list('bob'),[]);
  assert.ok(!JSON.stringify(await service.list('alice')).includes(input.token));
  assert.ok(!JSON.stringify(await service.list('alice')).includes('encrypted'));
  await assert.rejects(service.save('alice',input),e=>e.status===409);
- await service.save('bob',{...input,token:'synthetic-bob'});
- const link=await service.issue('bob','read',{name:input.name,claimChallenge});
- assert.equal((await redeem(service,'read',claim(link))).token,'synthetic-bob');
+ const link=await service.issue('bob','write',fields);await redeem(service,'write',claim(link),'synthetic-bob');
+ assert.equal((await service.list('alice')).length,1);assert.equal((await service.list('bob')).length,1);
 });
-test('read links expire at exactly 60 seconds and are consumed once across concurrent claims',async()=>{
- const {service,advance,sqlite}=fixture();await service.save('alice',input);
- const link=await service.issue('alice','read',{name:input.name,claimChallenge});
- assert.ok(!JSON.stringify(link).includes(input.token));
- assert.ok(!JSON.stringify(sqlite.prepare('SELECT * FROM handoffs').all()).includes(claim(link)));
- const results=await Promise.allSettled(Array.from({length:8},()=>redeem(service,'read',claim(link))));
- assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
- assert.equal(results.find(x=>x.status==='fulfilled').value.token,input.token);
- const expired=await service.issue('alice','read',{name:input.name,claimChallenge});advance(60000);
- await assert.rejects(redeem(service,'read',claim(expired)),e=>e.status===410);
- assert.ok(!JSON.stringify(await service.recent('alice')).includes(input.token));
- assert.ok(!JSON.stringify(await service.recent('alice')).includes(claim(link)));
-});
-test('stored credentials can be read immediately; updates and deletion revoke prior grants',async()=>{
- const {service}=fixture();await service.save('alice',input);
- const initial=await service.issue('alice','read',{name:input.name,claimChallenge});
- assert.equal((await redeem(service,'read',claim(initial))).token,input.token);
- const one=await service.issue('alice','read',{name:input.name,claimChallenge});
- await service.save('alice',{...input,overwrite:true,token:'synthetic-new'});
- await assert.rejects(redeem(service,'read',claim(one)),e=>e.status===410);
- const two=await service.issue('alice','read',{name:input.name,claimChallenge});await service.remove('alice',input.name);
- await assert.rejects(redeem(service,'read',claim(two)),e=>e.status===410);
-});
-test('write links upload directly, require explicit overwrite and reject stale writes',async()=>{
- const {service}=fixture();const fields={...input,token:undefined,claimChallenge};
- const upload=await service.issue('alice','write',fields);
- // Wrong operation and malformed upload cannot consume the valid write grant.
- await assert.rejects(redeem(service,'read',claim(upload)),e=>e.status===410);
- await assert.rejects(redeem(service,'write',claim(upload),'bad\nvalue'));
- await redeem(service,'write',claim(upload),'synthetic-upload');
- await assert.rejects(redeem(service,'write',claim(upload),'synthetic-repeat'),e=>e.status===410);
- await assert.rejects(service.issue('alice','write',fields),e=>e.status===409);
- const update=await service.issue('alice','write',{...fields,overwrite:true});
- await service.save('alice',{...input,overwrite:true});
- await assert.rejects(redeem(service,'write',claim(update),'synthetic-stale'));
- const read=await service.issue('alice','read',{name:input.name,claimChallenge});assert.equal((await redeem(service,'read',claim(read))).token,input.token);
-});
-test('read is fail-closed on audit failure and cannot be retried with same grant',async()=>{
+test('legacy read issuance and redemption are rejected even with an existing grant',async()=>{
  const {service,sqlite}=fixture();await service.save('alice',input);
- const link=await service.issue('alice','read',{name:input.name,claimChallenge});
- sqlite.exec("CREATE TRIGGER fail_audit BEFORE INSERT ON activity WHEN NEW.action='read.redeemed' BEGIN SELECT RAISE(ABORT,'synthetic audit outage'); END;");
- await assert.rejects(redeem(service,'read',claim(link)));
+ await assert.rejects(service.issue('alice','read',{name:input.name,claimChallenge}),e=>e.status===410);
+ const link=await service.issue('alice','write',{...fields,overwrite:true});
+ sqlite.exec("UPDATE handoffs SET kind='read'");
  await assert.rejects(redeem(service,'read',claim(link)),e=>e.status===410);
-});
-test('no vault origin configuration means no unusable claim URL is issued',async()=>{
- const {service}=fixture('');await service.save('alice',input);
- await assert.rejects(service.issue('alice','read',{name:input.name,claimChallenge}),e=>e.status===503);
-});
-
-test('link alone, missing verifier, wrong verifier and public hash cannot consume the grant',async()=>{
- const {service,sqlite}=fixture();await service.save('alice',input);
- await assert.rejects(service.issue('alice','read',{name:input.name}));
- await assert.rejects(service.issue('alice','read',{name:input.name,claimChallenge:'invalid'}));
- const link=await service.issue('alice','read',{name:input.name,claimChallenge});
- for(const secret of [undefined,'',randomBytes(32).toString('base64url'),claimChallenge])await assert.rejects(service.redeem('read',claim(link),undefined,secret),e=>e.status===403);
+ await assert.rejects(redeem(service,'write',claim(link),'synthetic'),e=>e.status===410);
  assert.equal(sqlite.prepare('SELECT used_at FROM handoffs').get().used_at,null);
- const events=await service.recent('alice');assert.equal(events.filter(x=>x.action==='read.proof_rejected').length,4);
- const metadata=JSON.stringify({link,events});assert.ok(!metadata.includes(verifier));
- assert.equal((await service.redeem('read',claim(link),undefined,verifier)).token,input.token);
 });
-test('proof for one grant does not unlock a grant bound to a different terminal',async()=>{
- const {service}=fixture();await service.save('alice',input);
- const another=randomBytes(32).toString('base64url'),anotherHash=createHash('sha256').update(another).digest('base64url');
- const a=await service.issue('alice','read',{name:input.name,claimChallenge});
- const b=await service.issue('alice','read',{name:input.name,claimChallenge:anotherHash});
- await assert.rejects(service.redeem('read',claim(b),undefined,verifier),e=>e.status===403);
- assert.equal((await service.redeem('read',claim(a),undefined,verifier)).token,input.token);
- assert.equal((await service.redeem('read',claim(b),undefined,another)).token,input.token);
+test('write links expire at 60 seconds and concurrent claims succeed once',async()=>{
+ const {service,advance,sqlite}=fixture();const link=await service.issue('alice','write',fields);
+ assert.ok(!JSON.stringify(sqlite.prepare('SELECT * FROM handoffs').all()).includes(claim(link)));
+ const results=await Promise.allSettled(Array.from({length:8},()=>redeem(service,'write',claim(link),input.token)));
+ assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
+ const expired=await service.issue('alice','write',{...fields,name:'test/expiry'});advance(60000);
+ await assert.rejects(redeem(service,'write',claim(expired),input.token),e=>e.status===410);
+ const audit=JSON.stringify(await service.recent('alice'));assert.ok(!audit.includes(input.token));assert.ok(!audit.includes(claim(link)));
 });
-test('legacy grants without a bound challenge fail closed',async()=>{
- const {service,sqlite}=fixture();await service.save('alice',input);
- const link=await service.issue('alice','read',{name:input.name,claimChallenge});
- sqlite.exec("UPDATE handoffs SET config=json_remove(config,'$.claimChallenge')");
- await assert.rejects(service.redeem('read',claim(link),undefined,verifier),e=>e.status===403);
+test('updates and deletion invalidate outstanding write grants; malformed uploads do not consume',async()=>{
+ const {service}=fixture();const first=await service.issue('alice','write',fields);
+ await assert.rejects(redeem(service,'write',claim(first),'bad\nvalue'));
+ await redeem(service,'write',claim(first),input.token);
+ await assert.rejects(service.issue('alice','write',fields),e=>e.status===409);
+ const stale=await service.issue('alice','write',{...fields,overwrite:true});
+ await service.save('alice',{...input,overwrite:true,token:'synthetic-new'});
+ await assert.rejects(redeem(service,'write',claim(stale),'synthetic-stale'),e=>e.status===410);
+ const deleted=await service.issue('alice','write',{...fields,overwrite:true});await service.remove('alice',input.name);
+ await assert.rejects(redeem(service,'write',claim(deleted),'synthetic-stale'),e=>e.status===410);
+});
+test('write audit failure rolls back credential and same grant cannot be retried',async()=>{
+ const {service,sqlite}=fixture();const link=await service.issue('alice','write',fields);
+ sqlite.exec("CREATE TRIGGER fail_audit BEFORE INSERT ON activity WHEN NEW.action='credential.created' BEGIN SELECT RAISE(ABORT,'synthetic audit outage'); END;");
+ await assert.rejects(redeem(service,'write',claim(link),input.token));
+ assert.deepEqual(await service.list('alice'),[]);
+ await assert.rejects(redeem(service,'write',claim(link),input.token),e=>e.status===410);
+});
+test('write link needs valid origin and proof; failed proofs do not consume grant',async()=>{
+ await assert.rejects(fixture('').service.issue('alice','write',fields),e=>e.status===503);
+ const {service,sqlite}=fixture();
+ for(const challenge of [undefined,'invalid'])await assert.rejects(service.issue('alice','write',{...fields,claimChallenge:challenge}));
+ const link=await service.issue('alice','write',fields);
+ for(const proof of [undefined,'',randomBytes(32).toString('base64url'),claimChallenge])await assert.rejects(service.redeem('write',claim(link),input.token,proof),e=>e.status===403);
+ assert.equal(sqlite.prepare('SELECT used_at FROM handoffs').get().used_at,null);
+ const events=await service.recent('alice');assert.equal(events.filter(x=>x.action==='write.proof_rejected').length,4);
+ assert.ok(!JSON.stringify({link,events}).includes(verifier));await redeem(service,'write',claim(link),input.token);
+});
+test('proofs cannot cross write grants and legacy unbound grants fail closed',async()=>{
+ const {service,sqlite}=fixture(),another=randomBytes(32).toString('base64url');
+ const a=await service.issue('alice','write',{...fields,name:'test/a'});
+ const b=await service.issue('alice','write',{...fields,name:'test/b',claimChallenge:createHash('sha256').update(another).digest('base64url')});
+ await assert.rejects(service.redeem('write',claim(b),input.token,verifier),e=>e.status===403);
+ await service.redeem('write',claim(a),input.token,verifier);await service.redeem('write',claim(b),input.token,another);
+ const c=await service.issue('alice','write',{...fields,name:'test/c'});sqlite.exec("UPDATE handoffs SET config=json_remove(config,'$.claimChallenge')");
+ await assert.rejects(service.redeem('write',claim(c),input.token,verifier),e=>e.status===403);
 });

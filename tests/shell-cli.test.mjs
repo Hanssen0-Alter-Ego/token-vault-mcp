@@ -13,7 +13,7 @@ const helper=resolve('cli/vault-cli.sh');
 const execute=(args,{input='',env={},trace=false}={})=>new Promise(resolve=>{
  const child=spawn('/bin/sh',[...(trace?['-x']:[]),helper,...args],{env:{...process.env,...env},stdio:['pipe','pipe','pipe']});
  let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
- child.on('exit',code=>resolve({code,stdout,stderr}));child.stdin.end(input);
+ child.on('exit',code=>resolve({code,stdout,stderr}));child.stdin.on('error',()=>{});child.stdin.end(input);
 });
 async function fixture(t) {
  const dir=await mkdtemp(join(tmpdir(),'vault-shell-test-'));
@@ -53,69 +53,81 @@ test('sh helper prepares cryptographic state with private permissions and prints
  assert.equal(f.requests.length,0);assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
 });
 
-test('sh upload and read work with real HTTPS and Worker, inject exact token and reject replay',async t=>{
+test('sh upload works with real HTTPS and Worker, stores exact token and rejects replay',async t=>{
  const f=await fixture(t),name='shell/test',value='synthetic-"quote"\\slash\ttab$(not-executed)';
  const upload=await f.prepare();
  const write=await f.rpc('create_token_write_link',{name,envVar:'GH_TOKEN',claimChallenge:upload.challenge});
  assert.equal(write.helper.url,f.origin+'/vault-cli.sh');
  const stored=await execute(f.args('store',upload.state),{input:write.url+'\n',env:{...f.environment,GH_TOKEN:value},trace:true});
- assert.equal(stored.code,0,stored.stderr);assert.ok(!stored.stdout.includes(value)&&!stored.stderr.includes(value)&&!stored.stderr.includes(upload.verifier));
+ assert.equal(stored.code,0,stored.stderr);assert.equal(stored.stdout,'');assert.ok(!stored.stderr.includes(value)&&!stored.stderr.includes(upload.verifier));
  await assert.rejects(access(upload.state));assert.equal(JSON.parse(f.requests[0].body).token,value);
  assert.equal(f.requests[0].headers['x-vault-verifier'],upload.verifier);assert.equal(f.requests[0].url,'/redeem/write');
- const p=await f.prepare(),read=await f.rpc('create_token_read_link',{name,claimChallenge:p.challenge});
- const metadata=JSON.stringify({write,read});
- assert.ok(!metadata.includes(value)&&!metadata.includes(upload.verifier)&&!metadata.includes(p.verifier));
- const childCode='const fs=require("node:fs"),c=require("node:crypto");if(fs.existsSync(process.argv[1])||c.createHash("sha256").update(process.env.GH_TOKEN||"").digest("hex")!==process.argv[2])process.exit(7);process.stdout.write("child-ok")';
- const result=await execute(f.args('run',p.state,[process.execPath,'-e',childCode,p.state,createHash('sha256').update(value).digest('hex')]),{input:read.url+'\n',env:f.environment});
- assert.equal(result.code,0,result.stderr);assert.equal(result.stdout,'child-ok');assert.ok(!result.stderr.includes(value)&&!result.stderr.includes(p.verifier));
- await assert.rejects(access(p.state));
- const url=new URL(read.url),replay=await fetchApp(new Request(f.origin+url.pathname,{method:'POST',headers:{Authorization:`Bearer ${url.hash.slice(1)}`,'X-Vault-Verifier':p.verifier}}),f.env);
+ assert.ok(!JSON.stringify(write).includes(value)&&!JSON.stringify(write).includes(upload.verifier));
+ const url=new URL(write.url),replay=await fetchApp(new Request(f.origin+url.pathname,{method:'POST',headers:{Authorization:`Bearer ${url.hash.slice(1)}`,'X-Vault-Verifier':upload.verifier,'Content-Type':'application/json'},body:JSON.stringify({token:value})}),f.env);
  assert.equal(replay.status,410);
  const audit=JSON.stringify(await f.rpc('recent_activity',{}));
- assert.ok(!audit.includes(value)&&!audit.includes(p.verifier)&&!audit.includes(url.hash.slice(1)));
+ assert.ok(!audit.includes(value)&&!audit.includes(upload.verifier)&&!audit.includes(url.hash.slice(1)));
  assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
 });
 
+test('removed shell run mode and read links cannot read a credential or execute a child',async t=>{
+ const f=await fixture(t),p=await f.prepare();
+ const result=await execute(f.args('run',p.state,['/bin/sh','-c','printf must-not-run']),{input:f.origin+'/redeem/read#'+'a'.repeat(64),env:f.environment});
+ assert.equal(result.code,1);assert.equal(result.stdout,'');assert.equal(f.requests.length,0);await access(p.state);
+ const wrong=await execute(f.args('store',p.state),{input:f.origin+'/redeem/read#'+'a'.repeat(64),env:{...f.environment,GH_TOKEN:'synthetic-store-token'}});
+ assert.equal(wrong.code,1);assert.equal(f.requests.length,0);
+ const extra=await execute(f.args('store',p.state,['/bin/echo','must-not-run']),{env:f.environment});
+ assert.equal(extra.code,1);assert.equal(extra.stdout,'');assert.equal(f.requests.length,0);
+});
+
 test('sh helper rejects unsafe state, origin and env substitution before sending a request',async t=>{
- const f=await fixture(t),p=await f.prepare(),link=f.origin+'/redeem/read#'+'a'.repeat(64);
- const run=state=>execute(f.args('run',state,['/bin/true']),{input:link,env:f.environment});
+ const f=await fixture(t),p=await f.prepare(),link=f.origin+'/redeem/write#'+'a'.repeat(64);
+ const run=state=>execute(f.args('store',state),{input:link,env:{...f.environment,GH_TOKEN:'synthetic-store-token'}});
  await chmod(p.state,0o644);assert.notEqual((await run(p.state)).code,0);await chmod(p.state,0o600);
  const linked=join(f.dir,'symlink.state');await symlink(p.state,linked);assert.notEqual((await run(linked)).code,0);
  for(const [index,value] of [[0,'untrusted-format'],[1,'https://other.example'],[2,'OTHER_TOKEN'],[3,'1'],[4,'$(not-executed)']]) {
    const lines=[...p.lines];lines[index]=value;await writeFile(p.state,lines.join('\n')+'\n');assert.notEqual((await run(p.state)).code,0);
  }
  await writeFile(p.state,p.lines.join('\n')+'\n');
- assert.notEqual((await execute(f.args('run',p.state,['/bin/true']),{input:link.replace(f.origin,'https://evil.example'),env:f.environment})).code,0);
+ assert.notEqual((await execute(f.args('store',p.state),{input:link.replace(f.origin,'https://evil.example'),env:{...f.environment,GH_TOKEN:'synthetic-store-token'}})).code,0);
  assert.equal(f.requests.length,0);
 });
 
-test('sh helper rejects redirects, wrong headers, HTTP errors and control bytes, cleaning all private state',async t=>{
+test('sh store rejects redirects, HTTP errors and oversized response, cleaning private state',async t=>{
  const f=await fixture(t);
  for(const response of [
    ()=>new Response('sensitive-error',{status:403}),
    ()=>new Response('sensitive-redirect',{status:302,headers:{Location:f.origin+'/redirected'}}),
-   ()=>new Response('sensitive-html',{headers:{'Content-Type':'text/html','X-Vault-Env':'GH_TOKEN'}}),
-   ()=>new Response('sensitive-env',{headers:{'Content-Type':'text/plain','X-Vault-Env':'OTHER_TOKEN'}}),
-   ()=>new Response('nul\0byte',{headers:{'Content-Type':'text/plain','X-Vault-Env':'GH_TOKEN'}}),
-   ()=>new Response('newline\n',{headers:{'Content-Type':'text/plain','X-Vault-Env':'GH_TOKEN'}}),
-   ()=>new Response('x'.repeat(8193),{headers:{'Content-Type':'text/plain','X-Vault-Env':'GH_TOKEN'}}),
+   ()=>new Response('x'.repeat(8193)),
  ]) {
-   f.setResponse(response);const p=await f.prepare(),link=f.origin+'/redeem/read#'+'a'.repeat(64);
-   const result=await execute(f.args('run',p.state,['/bin/sh','-c','printf must-not-run']),{input:link,env:f.environment});
+   f.setResponse(response);const p=await f.prepare(),link=f.origin+'/redeem/write#'+'a'.repeat(64);
+   const result=await execute(f.args('store',p.state),{input:link,env:{...f.environment,GH_TOKEN:'synthetic-store-token'}});
    assert.notEqual(result.code,0);assert.equal(result.stdout,'');assert.ok(!result.stderr.includes('sensitive')&&!result.stderr.includes(p.verifier));await assert.rejects(access(p.state));
  }
- assert.ok(f.requests.every(r=>r.url==='/redeem/read'));
+ assert.ok(f.requests.every(r=>r.url==='/redeem/write'));
  assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
 });
 
-test('sh helper runs without Node, Python, jq or Bash on PATH and preserves child exit code',async t=>{
+test('sh store rejects empty, control-byte and oversized source credentials before network',async t=>{
+ const f=await fixture(t);
+ for(const token of ['', 'newline\n', 'carriage\rreturn', 'x'.repeat(8193)]) {
+   const p=await f.prepare();
+   const result=await execute(f.args('store',p.state),{input:f.origin+'/redeem/write#'+'a'.repeat(64),env:{...f.environment,GH_TOKEN:token}});
+   assert.equal(result.code,1);assert.equal(result.stdout,'');await assert.rejects(access(p.state));
+ }
+ assert.equal(f.requests.length,0);assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
+});
+
+test('sh helper prepares and stores without Node, Python, jq or Bash on PATH',async t=>{
  const f=await fixture(t),bin=join(f.dir,'bin');await mkdir(bin);
  for(const command of ['curl','openssl','awk','tr','wc','cmp','stat','id','date','dirname','mktemp','cat','rm']) {
    const found=spawnSync('/bin/sh',['-c','command -v "$1"','sh',command],{encoding:'utf8'});assert.equal(found.status,0);await symlink(found.stdout.trim(),join(bin,command));
  }
- const p=await f.prepare({PATH:bin});f.setResponse(()=>new Response('synthetic-minimal-token',{headers:{'Content-Type':'text/plain','X-Vault-Env':'GH_TOKEN'}}));
- const result=await execute(f.args('run',p.state,['/bin/sh','-c','[ -n "$GH_TOKEN" ] || exit 9; printf minimal-ok; exit 23']),{input:f.origin+'/redeem/read#'+'a'.repeat(64),env:{...f.environment,PATH:bin}});
- assert.equal(result.code,23);assert.equal(result.stdout,'minimal-ok');await assert.rejects(access(p.state));
+ const p=await f.prepare({PATH:bin});
+ const grant=await f.rpc('create_token_write_link',{name:'shell/minimal',envVar:'GH_TOKEN',claimChallenge:p.challenge});
+ const result=await execute(f.args('store',p.state),{input:grant.url,env:{...f.environment,PATH:bin,GH_TOKEN:'synthetic-minimal-token'}});
+ assert.equal(result.code,0,result.stderr);assert.equal(result.stdout,'');await assert.rejects(access(p.state));
+ assert.equal(JSON.parse(f.requests[0].body).token,'synthetic-minimal-token');
 });
 
 test('a wrong shell proof cannot burn a valid write grant, and redemption never needs the MCP master key',async t=>{
@@ -135,17 +147,17 @@ test('failure diagnostics expose only numeric timings and final strictly formatt
   'CF-Ray':'a5bcdad4fbb17a72-DFW','X-Request-ID':'12345678-1234-1234-1234-123456789abc',
   'Authorization':'Bearer sensitive-response-header','Location':'https://secret.invalid/claim#sensitive-fragment'
  }}));
- const p=await f.prepare(),link=f.origin+'/redeem/read#'+'a'.repeat(64);
- const result=await execute(f.args('run',p.state,['/bin/echo','must-not-run']),{input:link,env:f.environment});
+ const p=await f.prepare(),link=f.origin+'/redeem/write#'+'a'.repeat(64);
+ const result=await execute(f.args('store',p.state),{input:link,env:{...f.environment,GH_TOKEN:'synthetic-store-token'}});
  assert.equal(result.code,1);assert.equal(result.stdout,'');
  assert.match(result.stderr,/curl_exit=0 started_epoch_s=\d+ finished_epoch_s=\d+ elapsed_s=\d+ http_status=503/);
  assert.match(result.stderr,/total_s=\d+\.\d+/);assert.match(result.stderr,/cf_ray=a5bcdad4fbb17a72-DFW/);
  assert.match(result.stderr,/request_id=12345678-1234-1234-1234-123456789abc/);
- for(const secret of ['sensitive',p.verifier,link,'a'.repeat(64),f.origin])assert.ok(!result.stderr.includes(secret));
+ for(const secret of ['sensitive','synthetic-store-token',p.verifier,link,'a'.repeat(64),f.origin])assert.ok(!result.stderr.includes(secret));
  await assert.rejects(access(p.state));
  for(const invalid of ['https://secret.invalid/claim#value','Bearer SECRET','a'.repeat(64),'a5bcdad4fbb17a72-DFW,other']) {
   f.setResponse(()=>new Response('private',{status:403,headers:{'CF-Ray':invalid,'X-Request-ID':invalid}}));
-  const next=await f.prepare(),r=await execute(f.args('run',next.state,['/bin/true']),{input:link,env:f.environment});
+  const next=await f.prepare(),r=await execute(f.args('store',next.state),{input:link,env:{...f.environment,GH_TOKEN:'synthetic-store-token'}});
   assert.equal(r.code,1);assert.ok(!r.stderr.includes(invalid));assert.ok(!r.stderr.includes('cf_ray=')&&!r.stderr.includes('request_id='));
  }
 });
@@ -165,10 +177,10 @@ printf 'HTTP/1.1 200 Connection established\\r\\nCF-Ray: 1111111111111111-DFW\\r
 printf '000\\n0.000001\\n0.000000\\n0.000000\\n0.000000\\n10.001234\\n'
 exit 28
 `,{mode:0o700});
- const p=await f.prepare(),link=f.origin+'/redeem/read#'+'b'.repeat(64);
- const result=await execute(f.args('run',p.state,['/bin/echo','must-not-run']),{input:link,env:{...f.environment,PATH:bin+':'+process.env.PATH}});
+ const p=await f.prepare(),link=f.origin+'/redeem/write#'+'b'.repeat(64);
+ const result=await execute(f.args('store',p.state),{input:link,env:{...f.environment,PATH:bin+':'+process.env.PATH,GH_TOKEN:'synthetic-store-token'}});
  assert.equal(result.code,1);assert.equal(result.stdout,'');assert.match(result.stderr,/curl_exit=28/);assert.match(result.stderr,/total_s=10.001234/);
- for(const secret of [p.verifier,'b'.repeat(64),'secret.invalid','private-body','malformed-secret','1111111111111111'])assert.ok(!result.stderr.includes(secret));
+ for(const secret of ['synthetic-store-token',p.verifier,'b'.repeat(64),'secret.invalid','private-body','malformed-secret','1111111111111111'])assert.ok(!result.stderr.includes(secret));
  await assert.rejects(access(p.state));assert.deepEqual((await readdir(f.dir)).filter(n=>n.startsWith('token-vault.')),[]);
 });
 

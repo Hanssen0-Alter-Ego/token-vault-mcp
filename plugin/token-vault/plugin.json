@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "token-vault",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Use named credentials through one-use links or encrypted offline envelopes without placing plaintext tokens in MCP messages.",
   "author": {
     "name": "Hanssen0-Alter-Ego"

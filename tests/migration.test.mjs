@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {randomBytes,createHash} from 'node:crypto';
 import {sqliteDB} from '../src/sqlite.mjs';
 import {VaultService} from '../.test-build/vault-service.mjs';
-import {encryptSecret} from '../.test-build/security.mjs';
+import {encryptSecret,decryptSecret} from '../.test-build/security.mjs';
 
 test('upgrade preserves encrypted credentials and audit history; both old Agent-use settings become readable',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'vault-upgrade-')),path=join(dir,'vault.sqlite');
@@ -37,10 +37,9 @@ test('upgrade preserves encrypted credentials and audit history; both old Agent-
    const saved=db.prepare('SELECT * FROM credentials WHERE name=?').bind(row.name).first();
    assert.equal(saved.id,row.id);assert.equal(saved.encrypted_token,row.encrypted);
    assert.deepEqual(Object.keys((await service.list('owner')).find(item=>item.name===row.name)).sort(),['envVar','name','updatedAt']);
-   const verifier=randomBytes(32).toString('base64url'),claimChallenge=createHash('sha256').update(verifier).digest('base64url');
-   const link=await service.issue('owner','read',{name:row.name,claimChallenge});
-   const result=await service.redeem('read',new URL(link.url).hash.slice(1),undefined,verifier);
-   assert.equal(result.token,row.token);assert.equal(result.envVar,'GH_TOKEN');
+   // Ciphertext and associated-data identity remain compatible with envelope reads.
+   assert.equal(await decryptSecret(saved.encrypted_token,`owner:${saved.id}`,key),row.token);
+
  }
  // The same migration runner must reopen the upgraded database without reapplying DROP COLUMN.
  db.close();db=sqliteDB(path);

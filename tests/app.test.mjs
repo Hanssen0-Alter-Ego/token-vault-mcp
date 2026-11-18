@@ -13,14 +13,14 @@ test('MCP requires Bearer or secret URL path; fragments and forged identity do n
  assert.equal((await fetchApp(request(env,'/mcp',options),env)).status,401);
  assert.equal((await fetchApp(request(env,`/mcp#${env.MCP_ACCESS_KEY}`,options),env)).status,401);
  assert.equal((await fetchApp(request(env,'/mcp',{...options,headers:{...options.headers,'oai-authenticated-user-id':'forged'}}),env)).status,401);
- const good=await fetchApp(request(env,`/mcp/${env.MCP_ACCESS_KEY}`,options),env);assert.equal(good.status,200);assert.equal((await good.json()).result.tools.length,7);
+ const good=await fetchApp(request(env,`/mcp/${env.MCP_ACCESS_KEY}`,options),env);assert.equal(good.status,200);assert.equal((await good.json()).result.tools.length,6);
  assert.equal((await fetchApp(request(env,'/mcp',{...options,headers:{...options.headers,Authorization:`Bearer ${env.MCP_ACCESS_KEY}`,Origin:'https://evil.example'}}),env)).status,403);
 });
 test('official MCP SDK initializes, discovers tools, calls a read tool and rejects invalid authentication',async()=>{
  const env=fixture(),client=new Client({name:'vault-verification',version:'1.0.0'});
  const transport=new StreamableHTTPClientTransport(new URL(`${env.PUBLIC_ORIGIN}/mcp/${env.MCP_ACCESS_KEY}`),{fetch:(url,init)=>fetchApp(new Request(url,init),env)});
  await client.connect(transport);
- assert.equal((await client.listTools()).tools.length,7);
+ assert.equal((await client.listTools()).tools.length,6);
  const verifier=randomBytes(32).toString('base64url');
  const claimChallenge=createHash('sha256').update(verifier).digest('base64url');
  const upload=await client.callTool({name:'create_token_write_link',arguments:{name:'sdk/token',envVar:'GH_TOKEN',claimChallenge}});
@@ -28,7 +28,7 @@ test('official MCP SDK initializes, discovers tools, calls a read tool and rejec
  const stored=await fetchApp(new Request(writeURL.origin+writeURL.pathname,{method:'POST',headers:{Authorization:`Bearer ${writeURL.hash.slice(1)}`,'X-Vault-Verifier':verifier,'Content-Type':'application/json'},body:JSON.stringify({token:'synthetic-sdk-token'})}),env);
  assert.equal(stored.status,200);
  const read=await client.callTool({name:'create_token_read_link',arguments:{name:'sdk/token',claimChallenge}});
- assert.ok(!read.isError);assert.ok(read.structuredContent.url);
+ assert.equal(read.isError,true);
  await client.callTool({name:'delete_token',arguments:{name:'sdk/token'}});
  const result=await client.callTool({name:'list_tokens',arguments:{}});assert.deepEqual(result.structuredContent.credentials,[]);assert.equal(result.structuredContent.proofMethod,'S256');assert.equal(result.structuredContent.helper.url,env.PUBLIC_ORIGIN+'/vault-cli.sh');
  await client.close();
@@ -63,17 +63,17 @@ test('manual upload uses only Bearer MCP auth, stores or explicitly replaces tok
  assert.ok(!JSON.stringify(listing).includes(value));
  assert.equal((await upload(input)).status,409);
  const proof=()=>{const verifier=randomBytes(32).toString('base64url');return {verifier,claimChallenge:createHash('sha256').update(verifier).digest('base64url')};};
- const first=proof(),oldLink=(await (await rpc(env,'create_token_read_link',{name,claimChallenge:first.claimChallenge})).json()).result.structuredContent;
+ const first=proof(),oldLink=(await (await rpc(env,'create_token_write_link',{name,envVar:'GH_TOKEN',overwrite:true,claimChallenge:first.claimChallenge})).json()).result.structuredContent;
  const newer='synthetic-replacement-token';assert.equal((await upload({...input,token:newer,envVar:'OPENAI_API_KEY',overwrite:true})).status,200);
- const claim=(url,verifier)=>{const link=new URL(url);return fetchApp(new Request(link.origin+link.pathname,{method:'POST',headers:{Authorization:`Bearer ${link.hash.slice(1)}`,'X-Vault-Verifier':verifier}}),env);};
- assert.equal((await claim(oldLink.url,first.verifier)).status,410);
- const fresh=proof(),read=(await (await rpc(env,'create_token_read_link',{name,claimChallenge:fresh.claimChallenge})).json()).result.structuredContent;
- const received=await claim(read.url,fresh.verifier);assert.equal(received.status,200);assert.equal(await received.text(),newer);assert.equal(received.headers.get('X-Vault-Env'),'OPENAI_API_KEY');
+ const link=new URL(oldLink.url);
+ const stale=await fetchApp(new Request(link.origin+link.pathname,{method:'POST',headers:{Authorization:`Bearer ${link.hash.slice(1)}`,'X-Vault-Verifier':first.verifier,'Content-Type':'application/json'},body:JSON.stringify({token:'synthetic-stale'})}),env);
+ assert.equal(stale.status,410);
+ for(const method of ['GET','POST'])assert.equal((await fetchApp(request(env,'/redeem/read',{method}),env)).status,410);
  const toolResponse=await fetchApp(request(env,'/mcp',{method:'POST',headers:{Authorization:`Bearer ${env.MCP_ACCESS_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}),env);
  const names=(await toolResponse.json()).result.tools.map(tool=>tool.name);
- assert.deepEqual(names.sort(),['get_cli_helper','create_token_envelope','create_token_read_link','create_token_write_link','delete_token','list_tokens','recent_activity'].sort());
+ assert.deepEqual(names.sort(),['get_cli_helper','create_token_envelope','create_token_write_link','delete_token','list_tokens','recent_activity'].sort());
  const audit=JSON.stringify((await (await rpc(env,'recent_activity')).json()).result.structuredContent);
- for(const secret of [value,newer,env.MCP_ACCESS_KEY,fresh.verifier])assert.ok(!audit.includes(secret));
+ for(const secret of [value,newer,env.MCP_ACCESS_KEY,first.verifier])assert.ok(!audit.includes(secret));
 });
 
 test('manual upload rejects malformed, excessive or accidental fields without changing stored data',async()=>{
@@ -93,7 +93,7 @@ test('MCP helper is fixed public data, matches packaged trusted hash, and reject
  assert.equal(helper.sha256,JSON.parse(await readFile('plugin/token-vault/skills/token-vault/references/envelope-helper-integrity.json','utf8')).sha256);
  assert.equal(createHash('sha256').update(helper.source).digest('hex'),helper.sha256);
  assert.equal(helper.filename,'vault-envelope.mjs');
- assert.equal(helper.version,'0.6.1');
+ assert.equal(helper.version,'0.7.0');
  assert.ok(!JSON.stringify(res).includes(env.MCP_ACCESS_KEY));
  assert.ok(!JSON.stringify(res).includes(env.VAULT_ENCRYPTION_KEY));
  for(const args of [{name:'secret'},[],{path:'/etc/passwd'},{source:'untrusted'}])

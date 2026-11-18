@@ -38,26 +38,21 @@ export class VaultService {
     await this.db.batch([this.db.prepare("DELETE FROM credentials WHERE user_id=? AND name=?").bind(user,name), this.db.prepare("DELETE FROM handoffs WHERE user_id=? AND name=?").bind(user,name), this.audit(user,name,"credential.removed")]);
     return { removed: true };
   }
-  async issue(user: string, kind: "read" | "write", input: { name: string; envVar?: string; overwrite?: boolean; claimChallenge?: string }) {
+  async issue(user: string, kind: "write", input: { name: string; envVar?: string; overwrite?: boolean; claimChallenge?: string }) {
+    if (kind !== "write") throw new AppError("Legacy read links are no longer supported; use an encrypted envelope.",410);
     const origin = redemptionOrigin(this.origin), name = validateName(input.name);
     const claimChallenge = validateClaimChallenge(input.claimChallenge);
     const existing = await this.record(user, name);
-    let config: object;
-    if (kind === "read") {
-      if (!existing) throw new AppError("找不到凭据。",404);
-      config = { claimChallenge, revision: existing.revision, envVar: existing.env_var };
-    } else {
-      this.fields(input);
-      if (existing && input.overwrite !== true) throw new AppError("同名凭据已存在，覆盖需要 overwrite=true。",409);
-      config = { claimChallenge, name, envVar: input.envVar, overwrite: input.overwrite === true, revision: existing?.revision || "absent" };
-    }
+    this.fields(input);
+    if (existing && input.overwrite !== true) throw new AppError("同名凭据已存在，覆盖需要 overwrite=true。",409);
+    const config = { claimChallenge, name, envVar: input.envVar, overwrite: input.overwrite === true, revision: existing?.revision || "absent" };
     const now = this.clock();
     await this.db.prepare("DELETE FROM handoffs WHERE expires_at <= ?").bind(now).run();
     const pending = await this.db.prepare("SELECT COUNT(*) AS n FROM handoffs WHERE user_id=? AND used_at IS NULL").bind(user).first<{n:number}>();
     if ((pending?.n || 0) >= 20) throw new AppError("未使用的领取链接过多，请稍后再试。",429);
     const ticket = newTicket(), hash = await ticketHash(ticket), expires = now + 60000;
     await this.db.batch([this.db.prepare("INSERT INTO handoffs(hash,user_id,name,kind,config,expires_at) VALUES(?,?,?,?,?,?)").bind(hash,user,name,kind,JSON.stringify(config),expires),this.audit(user,name,`${kind}.link_issued`)]);
-    return { url: `${origin}/redeem/${kind}#${ticket}`, method: "POST", helper: { url: `${origin}/vault-cli.sh`, sha256: CLI_SHA256 }, expiresAt: new Date(expires).toISOString(), oneTime: true, proofRequired: true, proofMethod: "S256", envVar: kind === "read" ? existing!.env_var : input.envVar, instruction: "Sensitive one-time link. The matching terminal-held verifier is mandatory; never send it through MCP or chat. Use the CLI helper immediately; fragment is the Bearer claim, never send the fragment in a query/path. Do not print the response, enable tracing, or store the token. A lost response requires a fresh link. This link does not expire the provider token or stop a process already holding it. Use the packaged sh helper with curl and openssl." };
+    return { url: `${origin}/redeem/${kind}#${ticket}`, method: "POST", helper: { url: `${origin}/vault-cli.sh`, sha256: CLI_SHA256 }, expiresAt: new Date(expires).toISOString(), oneTime: true, proofRequired: true, proofMethod: "S256", envVar: input.envVar, instruction: "Sensitive one-time link. The matching terminal-held verifier is mandatory; never send it through MCP or chat. Use the CLI helper immediately; fragment is the Bearer claim, never send the fragment in a query/path. Do not print the response, enable tracing, or store the token. A lost response requires a fresh link. This link does not expire the provider token or stop a process already holding it. Use the packaged sh helper with curl and openssl." };
   }
   async envelope(user:string,input:unknown) {
     const request=await validateEnvelopeRequest(input,this.origin);
@@ -75,9 +70,10 @@ export class VaultService {
     await this.audit(user,request.name,"read.envelope_issued").run();
     return {envelope};
   }
-  async redeem(kind: "read" | "write", ticket: string, token?: unknown, verifier?: unknown) {
+  async redeem(kind: "write", ticket: string, token?: unknown, verifier?: unknown) {
     // Validate upload before claiming; malformed uploads must never overwrite a saved credential.
-    const secret = kind === "write" ? validateSecret(token) : undefined;
+    if (kind !== "write") throw new AppError("Legacy read links are no longer supported; use an encrypted envelope.",410);
+    const secret = validateSecret(token);
     const hash = await ticketHash(ticket), now = this.clock();
     const challenge = await verifierChallenge(verifier);
     // Compare the bound proof and consume in the same atomic statement. Wrong proofs never burn the grant.
@@ -91,12 +87,6 @@ export class VaultService {
       throw new AppError("领取链接无效、已使用或已过期。",410);
     }
     const config = JSON.parse(grant.config);
-    if (kind === "write") return this.save(grant.user_id, {...config,token:secret},config.revision);
-    const row = await this.record(grant.user_id,grant.name);
-    if (!row || row.revision !== config.revision) throw new AppError("凭据已变更，链接失效。",410);
-    const value = await decryptSecret(row.encrypted_token,`${grant.user_id}:${row.id}`,this.key);
-    // Fail closed if auditing fails: never return plaintext before the audit record is durable.
-    await this.audit(grant.user_id,grant.name,"read.redeemed").run();
-    return { token:value, envVar:row.env_var };
+    return this.save(grant.user_id, {...config,token:secret},config.revision);
   }
 }
