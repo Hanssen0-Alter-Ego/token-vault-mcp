@@ -15,6 +15,14 @@ Three values stay separate: MCP connection key, provider Token, and per-operatio
 
 **Manual upload boundary:** `/admin/tokens` is exclusively for a user operating their own terminal. During credential operations, never call that endpoint, retrieve its Bearer key, read its private input files, or run its upload command for the user—even when a master key is available. Agents always use `create_token_write_link` and the helper. If the user wants manual upload, explain the README procedure and let them execute it privately. Never add the direct endpoint as an MCP tool or an alternative Agent path.
 
+### User-operated upload: public `vault-upload.sh`
+
+For the owner to upload privately without requesting an Agent-issued link, the upgraded Vault serves an unauthenticated **GET `https://YOUR_VAULT_HOST/vault-upload.sh`** at the exact same HTTPS origin. This is only a fixed public script download: it does not read credentials or relax the Bearer-protected `/admin/tokens` API. A healthy `/health` plus uploader 404 means the deployment may predate this route; update the Worker instead of bypassing verification.
+
+Point the owner to the README's download → SHA-256 verification → `sh` procedure. No repository clone or preinstalled Vault helper is required; POSIX `sh`, curl, standard Unix tools and a SHA-256 checker are still needed. Never pipe a network response into a shell, source it, or trust a hash supplied only by the same download server. This unchanged script's independently reviewed SHA-256 is `e52a6d390f78a9f1dbf0603985b89a8dfb03d5654ea2b10d99125a57bc7ba3ac`, corresponding to [this fixed source revision](https://github.com/Hanssen0-Alter-Ego/token-vault-mcp/blob/b3dbca38c4520876ce3aca540b2803b94026a167/cli/vault-upload.sh). If it differs, review/update the trusted release information first.
+
+Only the owner runs `sh vault-upload.sh --origin https://YOUR_VAULT_HOST NAME ENV_VAR` in their own interactive terminal, privately entering the management key and provider token. No prepare/challenge/one-use link is needed for this manual path; `--overwrite` is only for an intended replacement. Agents must not execute the uploader against the live Vault, request either secret in chat, or use this path in place of the bound one-use upload flow. The uploader is deliberately not packaged among Agent scripts.
+
 ## Upload: prepare → issue → store
 
 Use the same terminal filesystem, origin, environment variable and state path throughout one operation. Download/install dependencies before issuing a link; its 60-second validity starts at issuance.

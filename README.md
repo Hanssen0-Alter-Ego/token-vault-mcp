@@ -183,16 +183,30 @@ sh cli/vault-upload.sh --origin https://YOUR_VAULT_HOST github/main GH_TOKEN --o
 
 把域名替换成你自己的 HTTPS origin，不带路径或末尾斜杠；名称和环境变量按需修改。脚本没有默认服务地址，避免误传到别人的金库。不加 `--overwrite` 时只允许新建，同名记录返回 409。
 
-不需要克隆整个项目时，可以先下载脚本，再在自己的终端运行：
+不需要克隆项目或预先安装 helper。升级后的 Vault 在**相同 HTTPS origin 的 `/vault-upload.sh`** 提供免认证的静态脚本下载；下载不需要管理密钥，不会读取或写入凭据。`/admin/tokens` 的认证要求不变。`/health` 正常但此路径返回 404，通常表示尚未部署包含该路由的新版 Worker；不要去掉下载命令的失败检查。
+
+先从你信任的发布版本或已审阅文档确认 SHA-256，再下载、校验并由本人执行，禁止 `curl | sh`。本版脚本未改动，可信比对值为 `e52a6d390f78a9f1dbf0603985b89a8dfb03d5654ea2b10d99125a57bc7ba3ac`，对应 [已固定的脚本源码](https://github.com/Hanssen0-Alter-Ego/token-vault-mcp/blob/b3dbca38c4520876ce3aca540b2803b94026a167/cli/vault-upload.sh)。不要把下载服务器同时返回的 hash 当作独立信任依据；升级后 hash 不同，先审阅新版脚本及可信发布记录，不要跳过校验。
+
+在自己的交互终端执行（下面另需 `sha256sum`，不需要 `chmod +x`）：
 
 ```sh
-curl -q --fail --silent --show-error --proto '=https' \
-  -o vault-upload.sh \
-  https://raw.githubusercontent.com/Hanssen0-Alter-Ego/token-vault-mcp/main/cli/vault-upload.sh
-
-sh vault-upload.sh --origin https://YOUR_VAULT_HOST openai/main OPENAI_API_KEY
+(
+  set -eu
+  umask 077
+  origin=https://YOUR_VAULT_HOST
+  download_dir=$(mktemp -d)
+  trap 'rm -rf "$download_dir"' EXIT HUP INT TERM
+  curl -q --fail --silent --show-error --proto '=https' \
+    --connect-timeout 10 --max-time 30 \
+    -o "$download_dir/vault-upload.sh" "$origin/vault-upload.sh"
+  printf '%s  %s\n' \
+    e52a6d390f78a9f1dbf0603985b89a8dfb03d5654ea2b10d99125a57bc7ba3ac \
+    "$download_dir/vault-upload.sh" | sha256sum --check --status
+  sh "$download_dir/vault-upload.sh" --origin "$origin" openai/main OPENAI_API_KEY
+)
 ```
 
+`sh` 仍然是执行脚本所需的系统 shell，并非需要另行安装的 Vault helper。只有在校验成功后脚本才会提示输入密钥；下载不跟随跨站重定向。要替换已有凭据，在最后一条 `sh` 命令末尾显式添加 `--overwrite`。
 运行时依次隐藏输入金库的 `MCP_ACCESS_KEY` 和要保存的单行业务 Token。无需把密钥写进命令、设置环境变量或先申请链接；成功显示 `{"stored":true}`。认证头和 JSON 请求体通过 0600 私有临时文件传递，正常完成或请求失败后都会清理；脚本还会恢复终端回显。强制终止或系统崩溃时，临时文件可能残留。
 
 认证失败返回 401；新建时遇到重名返回 409，请确认后用 `--overwrite` 再次运行。不要向聊天发送密钥、临时文件或带密钥的连接 URL。

@@ -17,3 +17,5 @@ data/
 *.claim.state
 
 src/envelope-source.ts
+
+src/upload-source.ts

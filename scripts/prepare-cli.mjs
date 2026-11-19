@@ -16,3 +16,7 @@ await copyFile('cli/vault-envelope.mjs',`${skill}/scripts/vault-envelope.mjs`);
 await writeFile(`${skill}/references/envelope-helper-integrity.json`,JSON.stringify({algorithm:'sha256',sha256:createHash('sha256').update(envelopeSource).digest('hex')},null,2)+'\n');
 
 await writeFile('src/envelope-source.ts',`// Generated public offline helper.\nexport const ENVELOPE_SOURCE=${JSON.stringify(envelopeSource)};\nexport const ENVELOPE_SHA256=${JSON.stringify(createHash('sha256').update(envelopeSource).digest('hex'))};\n`);
+
+// Public download for owner-operated uploads only. Never copy this into Agent skills.
+const uploadSource=await readFile('cli/vault-upload.sh','utf8');
+await writeFile('src/upload-source.ts',`// Generated public owner-operated upload helper.\nexport const UPLOAD_SOURCE=${JSON.stringify(uploadSource)};\n`);

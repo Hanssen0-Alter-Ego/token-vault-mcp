@@ -3,6 +3,7 @@ import {AppError,assertSameOrigin,readJSON} from './lib/security';
 import {tools} from './tools';
 import {ENVELOPE_SOURCE,ENVELOPE_SHA256} from './envelope-source';
 import {CLI_SOURCE} from './cli-source';
+import {UPLOAD_SOURCE} from './upload-source';
 import {CLI_SHA256} from './lib/cli-integrity';
 export interface Env {DB:D1Database;PUBLIC_ORIGIN:string;VAULT_ENCRYPTION_KEY:string;MCP_ACCESS_KEY:string;}
 const owner='owner';
@@ -83,6 +84,7 @@ export async function fetchApp(request:Request,env:Env):Promise<Response> {
   if(url.search)throw new AppError('Query strings are not supported',400);
   if(path==='/health' && request.method==='GET')return json({ok:true});
   if(path==='/vault-cli.sh' && request.method==='GET')return new Response(CLI_SOURCE,{headers:{...baseHeaders,'Content-Type':'text/plain; charset=utf-8'}});
+  if(path==='/vault-upload.sh' && request.method==='GET')return new Response(UPLOAD_SOURCE,{headers:{...baseHeaders,'Content-Type':'text/plain; charset=utf-8'}});
   if(path==='/admin/tokens')return await manualUpload(request,env);
   if(path==='/mcp' || path.startsWith('/mcp/'))return await mcp(request,env,path);
   if(path==='/redeem/read')return json({error:'Legacy read links are retired; use create_token_envelope.'},410);

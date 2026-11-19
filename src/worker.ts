@@ -6,6 +6,7 @@ function routeLabel(request:Request):string {
  switch(path){
   case '/health':return 'health';
   case '/vault-cli.sh':return 'helper';
+  case '/vault-upload.sh':return 'manual_upload_helper';
   case '/redeem/read':return 'redeem_read';
   case '/redeem/write':return 'redeem_write';
   case '/admin/tokens':return 'manual_upload';
